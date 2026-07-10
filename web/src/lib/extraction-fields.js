@@ -136,15 +136,48 @@ export function tableColumnsFromRows(rows, preferred = []) {
 
 // ── DL fields ────────────────────────────────────────────────────────────────
 const DL_LICENCE = [
-  'dlNumber', 'dlNumberNormalized', 'name', 'dob', 'address', 'state',
+  'dlNumber', 'name', 'fatherSpouseName', 'dob', 'address', 'presentAddress',
+  'stateCode', 'mobileNo', 'bloodGroup', 'organDonor',
 ]
-const DL_VALIDITY = ['issueDate', 'validityNT', 'issuingRto']
-const DL_STATUS = ['isNTValid', 'isExpired']
-const DL_CLASS_COLUMNS = ['vehicleClass', 'issuedOn']
+const DL_VALIDITY = [
+  'issueDate', 'validityNT', 'validityT', 'issuingRto',
+  'hazardousValidity', 'hillValidity',
+  'endorseNo', 'endorseAuth', 'endorseDate',
+]
+const DL_OTHER = ['dlPurpose', 'formType']
+const DL_DERIVED = ['dlNumberNormalized', 'state', 'dlFormat', 'addressComplete']
+const DL_STATUS = ['isNTValid', 'isTValid', 'isExpired']
+const DL_CLASS_COLUMNS = [
+  'vehicleClass', 'classCode', 'classDescription', 'issuedOn', 'validity',
+  'badgeNumber', 'badgeIssuedDate', 'badgeIssuedBy',
+]
 const DL_QUALITY = [
   'isCorrectDocumentType', 'detectedDocumentType', 'hasAllPagesCorrectType',
   'invalidPageIndices', 'confidenceScore', 'requiresHumanReview', 'lowConfidenceFields',
+  'documentQuality',
 ]
+
+/** Prefer nested extracted/derived/meta when present; fall back to flat legacy shape. */
+function dlPartition(result) {
+  if (result?.extracted && typeof result.extracted === 'object') {
+    return {
+      extracted: result.extracted,
+      derived: result.derived ?? {},
+      meta: result.meta ?? {},
+    }
+  }
+  const extracted = {}
+  const derived = {}
+  const meta = {}
+  for (const key of DL_LICENCE) extracted[key] = result?.[key]
+  for (const key of DL_VALIDITY) extracted[key] = result?.[key]
+  for (const key of DL_OTHER) extracted[key] = result?.[key]
+  extracted.vehicleClasses = result?.vehicleClasses
+  for (const key of DL_DERIVED) derived[key] = result?.[key]
+  derived.dlStatus = result?.dlStatus
+  for (const key of DL_QUALITY) meta[key] = result?.[key]
+  return { extracted, derived, meta }
+}
 
 // ── RC fields ─────────────────────────────────────────────────────────────────
 const RC_VEHICLE = [
@@ -320,12 +353,17 @@ export function buildInspectViews(documentType, result) {
 
   switch (documentType) {
     case 'DL': {
+      const { extracted, derived, meta } = dlPartition(result)
       const tabs = [
-        fieldTab('licence', 'Licence', pickFieldRows(result, DL_LICENCE)),
-        fieldTab('validity', 'Validity', pickFieldRows(result, DL_VALIDITY)),
-        fieldTab('status', 'DL status', expandNestedRows(result, 'dlStatus', DL_STATUS)),
-        tableTab('classes', 'Vehicle classes', formatTableRows(result.vehicleClasses), DL_CLASS_COLUMNS),
-        fieldTab('quality', 'Quality', pickFieldRows(result, DL_QUALITY)),
+        fieldTab('licence', 'Licence', pickFieldRows(extracted, DL_LICENCE)),
+        fieldTab('validity', 'Validity', pickFieldRows(extracted, DL_VALIDITY)),
+        fieldTab('other', 'Other', pickFieldRows(extracted, DL_OTHER)),
+        tableTab('classes', 'Vehicle classes', formatTableRows(extracted.vehicleClasses), DL_CLASS_COLUMNS),
+        fieldTab('derived', 'Derived', [
+          ...pickFieldRows(derived, DL_DERIVED),
+          ...expandNestedRows(derived, 'dlStatus', DL_STATUS),
+        ]),
+        fieldTab('quality', 'Quality', pickFieldRows(meta, DL_QUALITY)),
         allTab,
         jsonTab,
       ]

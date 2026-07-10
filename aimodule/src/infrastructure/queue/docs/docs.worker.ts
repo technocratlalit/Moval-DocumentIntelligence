@@ -143,7 +143,12 @@ const processDocumentJob = async (job: Job): Promise<any> => {
         tableLayout: workshopLayout,
       });
 
-      return extractedData;
+      return {
+        data: extractedData,
+        totalTokens: summary?.totalTokens ?? 0,
+        totalCostINR: summary?.totalCostINR ?? 0,
+        durationMs,
+      };
     } catch (error: any) {
       const durationMs = Date.now() - startTime;
       const isLastAttempt = job.attemptsMade >= (job.opts.attempts ?? 3) - 1;

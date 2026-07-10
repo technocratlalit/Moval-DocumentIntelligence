@@ -32,6 +32,7 @@ const STATE_MAP: Record<string, string> = {
   TR: 'TRIPURA',
   UP: 'UTTAR PRADESH',
   UK: 'UTTARAKHAND',
+  UA: 'UTTARAKHAND',
   WB: 'WEST BENGAL',
   AN: 'ANDAMAN AND NICOBAR ISLANDS',
   CH: 'CHANDIGARH',
@@ -39,9 +40,42 @@ const STATE_MAP: Record<string, string> = {
   DL: 'DELHI',
 };
 
+const MONTH_MAP: Record<string, number> = {
+  JAN: 0, JANUARY: 0,
+  FEB: 1, FEBRUARY: 1,
+  MAR: 2, MARCH: 2,
+  APR: 3, APRIL: 3,
+  MAY: 4,
+  JUN: 5, JUNE: 5,
+  JUL: 6, JULY: 6,
+  AUG: 7, AUGUST: 7,
+  SEP: 8, SEPT: 8, SEPTEMBER: 8,
+  OCT: 9, OCTOBER: 9,
+  NOV: 10, NOVEMBER: 10,
+  DEC: 11, DECEMBER: 11,
+};
+
+const EMPTY_SENTINELS = new Set(['NA', 'N/A', 'NIL', '-', '--', 'N.A.F.', 'NAF']);
+
 export interface RCStateHints {
   cardStateCode?: string | null;
   rtoCode?: string | null;
+}
+
+export function isEmptySentinel(raw: string | null | undefined): boolean {
+  if (!raw) return true;
+  const trimmed = raw.trim();
+  if (!trimmed) return true;
+  const upper = trimmed.toUpperCase();
+  if (EMPTY_SENTINELS.has(upper)) return true;
+  if (/^0+$/.test(trimmed.replace(/[^0-9]/g, ''))) return true;
+  if (/^0{2}\/0{2}\/0{4}$/.test(trimmed)) return true;
+  return false;
+}
+
+export function cleanSentinelField(raw: string | null | undefined): string | null {
+  if (isEmptySentinel(raw)) return null;
+  return raw!.trim();
 }
 
 // normalize registration number
@@ -68,13 +102,13 @@ export function extractStateCode(
   hints: RCStateHints = {},
 ): string | null {
   const card = hints.cardStateCode?.trim().toUpperCase();
-  if (card && STATE_MAP[card]) return card;
+  if (card && STATE_MAP[card]) return card === 'UA' ? 'UK' : card;
 
   const clean = normalizeRegNo(regNo);
   if (!clean || clean.length < 2) return null;
 
   const prefix2 = clean.substring(0, 2).toUpperCase();
-  if (STATE_MAP[prefix2]) return prefix2;
+  if (STATE_MAP[prefix2]) return prefix2 === 'UA' ? 'UK' : prefix2;
 
   if (isBharatSeriesRegNo(clean)) {
     return stateCodeFromRto(hints.rtoCode);
@@ -88,24 +122,37 @@ export function detectStateFromRegNo(
   hints: RCStateHints = {},
 ): string | null {
   const code = extractStateCode(regNo, hints);
-  return code ? STATE_MAP[code] ?? null : null;
+  if (!code) return null;
+  const normalized = code === 'UA' ? 'UK' : code;
+  return STATE_MAP[normalized] ?? null;
 }
 
 // parse indian date strings → Date object
-function parseIndianDate(dateStr: string | null | undefined): Date | null {
-  if (!dateStr) return null;
+export function parseIndianDate(dateStr: string | null | undefined): Date | null {
+  if (!dateStr || isEmptySentinel(dateStr)) return null;
 
-  const full = dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const normalized = dateStr.trim();
+
+  const full = normalized.match(/^(\d{2})[\/\-](\d{2})[\/\-](\d{4})$/);
   if (full) {
     const [, dd, mm, yyyy] = full;
-    const d = new Date(`${yyyy}-${mm}-${dd}`);
+    const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
     return isNaN(d.getTime()) ? null : d;
   }
 
-  const monthYear = dateStr.match(/^(\d{2})\/(\d{4})$/);
+  const monthYear = normalized.match(/^(\d{2})[\/\-](\d{4})$/);
   if (monthYear) {
     const [, mm, yyyy] = monthYear;
-    const d = new Date(`${yyyy}-${mm}-01`);
+    const d = new Date(Number(yyyy), Number(mm) - 1, 1);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const ddMonYyyy = normalized.match(/^(\d{2})[\-\/]([A-Za-z]+)[\-\/](\d{4})$/);
+  if (ddMonYyyy) {
+    const [, dd, monRaw, yyyy] = ddMonYyyy;
+    const mon = MONTH_MAP[monRaw.toUpperCase()];
+    if (mon === undefined) return null;
+    const d = new Date(Number(yyyy), mon, Number(dd));
     return isNaN(d.getTime()) ? null : d;
   }
 
@@ -143,28 +190,107 @@ export function stripLeadingZeros(raw: string | null | undefined): number | null
   return isNaN(parsed) ? null : parsed;
 }
 
+const FINANCE_KEYWORDS = /^(NEW|HPA|HYP|TO|LA|WITH|N\.?A\.?F\.?|PRIVATE|COMMERCIAL)$/i;
+
+function looksLikeFinancer(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || isEmptySentinel(trimmed)) return false;
+  if (FINANCE_KEYWORDS.test(trimmed)) return false;
+  return trimmed.length > 2;
+}
+
 /** Split NEW/HPA + bank from purpose when financeBank / hypothecatedTo missing */
 export function normaliseFinanceFields(data: {
   purpose?: string | null;
   financeBank?: string | null;
   hypothecatedTo?: string | null;
 }): { purpose: string | null; financeBank: string | null; hypothecatedTo: string | null } {
-  let purpose = data.purpose?.trim() ?? null;
-  let financeBank = data.financeBank?.trim() ?? null;
-  let hypothecatedTo = data.hypothecatedTo?.trim() ?? null;
+  let purpose = cleanSentinelField(data.purpose);
+  let financeBank = cleanSentinelField(data.financeBank);
+  let hypothecatedTo = cleanSentinelField(data.hypothecatedTo);
 
-  if (purpose && /HPA/i.test(purpose) && !financeBank) {
-    const parts = purpose.split(/[/\s]+/).filter(Boolean);
-    const bankPart = parts.find((p) => p.length > 3 && !/^(NEW|HPA|TO)$/i.test(p));
+  if (purpose && /HPA|HYP|LA/i.test(purpose) && !financeBank) {
+    const slashParts = purpose.split('/').map((p) => p.trim()).filter(Boolean);
+    const bankPart = slashParts.find((p) => looksLikeFinancer(p));
     if (bankPart) {
       financeBank = bankPart;
       if (!hypothecatedTo) hypothecatedTo = bankPart;
+    } else {
+      const spaceParts = purpose.split(/\s+/).filter(Boolean);
+      const bankFromSpace = spaceParts.find((p) => looksLikeFinancer(p));
+      if (bankFromSpace) {
+        financeBank = bankFromSpace;
+        if (!hypothecatedTo) hypothecatedTo = bankFromSpace;
+      }
     }
   }
 
-  if (hypothecatedTo && ['NA', 'N/A', 'NIL', '--'].includes(hypothecatedTo.toUpperCase())) {
-    hypothecatedTo = null;
+  if (purpose && !financeBank) {
+    const purposeOnlyBank = purpose.replace(/^(NEW|TO|PRIVATE|COMMERCIAL)\s*[\/\s]*/i, '').trim();
+    if (purposeOnlyBank && looksLikeFinancer(purposeOnlyBank) && purposeOnlyBank !== purpose) {
+      financeBank = purposeOnlyBank;
+      if (!hypothecatedTo) hypothecatedTo = purposeOnlyBank;
+    }
+  }
+
+  if (hypothecatedTo && !financeBank && looksLikeFinancer(hypothecatedTo)) {
+    financeBank = hypothecatedTo;
+  }
+
+  if (financeBank && !hypothecatedTo) {
+    hypothecatedTo = financeBank;
   }
 
   return { purpose, financeBank, hypothecatedTo };
+}
+
+export function deriveHypothecation(data: {
+  purpose?: string | null;
+  financeBank?: string | null;
+  hypothecatedTo?: string | null;
+}): 'Yes' | 'No' | null {
+  const financeBank = cleanSentinelField(data.financeBank);
+  const hypothecatedTo = cleanSentinelField(data.hypothecatedTo);
+  const purpose = cleanSentinelField(data.purpose);
+
+  if (financeBank || hypothecatedTo) return 'Yes';
+
+  if (purpose && /HPA|HYP|LA\s*WITH/i.test(purpose)) return 'Yes';
+
+  if (purpose && /^(NEW|TO|PRIVATE|COMMERCIAL)$/i.test(purpose.trim())) return 'No';
+
+  if (purpose === null && financeBank === null && hypothecatedTo === null) return null;
+
+  return 'No';
+}
+
+export function normaliseRCExtraction(raw: Record<string, unknown>): Record<string, unknown> {
+  const fuel =
+    cleanSentinelField(raw.fuel as string | null | undefined) ??
+    cleanSentinelField(raw.fuelType as string | null | undefined);
+
+  const fitnessValidUpto =
+    cleanSentinelField(raw.fitnessValidUpto as string | null | undefined) ??
+    cleanSentinelField(raw.fitnessUpto as string | null | undefined);
+
+  return {
+    ...raw,
+    fuel,
+    fitnessValidUpto,
+    fatherSpouseName: cleanSentinelField(raw.fatherSpouseName as string | null | undefined),
+    address: cleanSentinelField(raw.address as string | null | undefined),
+    ownerSerial: cleanSentinelField(raw.ownerSerial as string | null | undefined),
+    taxPaidUpto: cleanSentinelField(raw.taxPaidUpto as string | null | undefined),
+    cubicCapacity: cleanSentinelField(raw.cubicCapacity as string | null | undefined),
+    purpose: cleanSentinelField(raw.purpose as string | null | undefined),
+    financeBank: cleanSentinelField(raw.financeBank as string | null | undefined),
+    hypothecatedTo: cleanSentinelField(raw.hypothecatedTo as string | null | undefined),
+    stateCode: cleanSentinelField(raw.stateCode as string | null | undefined),
+    bodyType: cleanSentinelField(raw.bodyType as string | null | undefined),
+    wheelBase: cleanSentinelField(raw.wheelBase as string | null | undefined),
+    standingCapacity: cleanSentinelField(raw.standingCapacity as string | null | undefined),
+    insuranceUpto: cleanSentinelField(raw.insuranceUpto as string | null | undefined),
+    cardSerialNo: cleanSentinelField(raw.cardSerialNo as string | null | undefined),
+    formType: cleanSentinelField(raw.formType as string | null | undefined),
+  };
 }

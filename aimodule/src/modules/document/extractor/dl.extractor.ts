@@ -8,6 +8,7 @@ import {
   computeDLStatus,
   normaliseDLExtraction,
 } from '../utils/dl/dl.utils';
+import { shapeDLResponse } from '../utils/dl/dl-response.util.js';
 import { ObserverService } from '../../../infrastructure/observabllity/observer.service.js';
 import {
   enforceDocumentTypeGates,
@@ -54,7 +55,9 @@ export class DLExtractor {
     const normalizedData = {
       ...cleaned,
       dlNumberNormalized: normalizeDLNumber(cleaned.dlNumber as string | null | undefined),
-      state: detectStateFromDL(cleaned.dlNumber as string | null | undefined),
+      state: detectStateFromDL(cleaned.dlNumber as string | null | undefined, {
+        stateCode: cleaned.stateCode as string | null | undefined,
+      }),
       dlStatus: computeDLStatus(
         cleaned.validityNT as string | null | undefined,
         cleaned.validityT as string | null | undefined,
@@ -94,10 +97,12 @@ export class DLExtractor {
       );
     }
 
-    return mergeDocumentQuality(
+    const withQuality = mergeDocumentQuality(
       parsedResult,
       getQualityHintFromInput(inputData),
       _config.PRESCREEN_BLUR_CONFIDENCE,
     );
+
+    return shapeDLResponse(withQuality);
   }
 }

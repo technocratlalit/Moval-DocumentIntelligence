@@ -31,8 +31,16 @@ const STATUS_VARIANT = {
   processing: 'outline',
 }
 
-function formatJson(value) {
-  return JSON.stringify(value, null, 2)
+function formatTokens(job) {
+  if (job.totalTokens != null) return job.totalTokens.toLocaleString()
+  if (job.cached) return '0'
+  return '—'
+}
+
+function formatCost(job) {
+  if (job.totalCostINR != null) return `₹${job.totalCostINR.toFixed(4)}`
+  if (job.cached) return '₹0.0000'
+  return '—'
 }
 
 function resolveMode(docType, modeChoice) {
@@ -441,10 +449,10 @@ export function DocTestPage({ docType }) {
                           {job.completedAt ? new Date(job.completedAt).toLocaleString() : '—'}
                         </TableCell>
                         <TableCell className="tabular-nums text-xs">
-                          {job.totalTokens != null ? job.totalTokens.toLocaleString() : '—'}
+                          {formatTokens(job)}
                         </TableCell>
                         <TableCell className="tabular-nums text-xs">
-                          {job.totalCostINR != null ? `₹${job.totalCostINR.toFixed(4)}` : '—'}
+                          {formatCost(job)}
                         </TableCell>
                         <TableCell className="text-right">
                           <DropdownMenu>

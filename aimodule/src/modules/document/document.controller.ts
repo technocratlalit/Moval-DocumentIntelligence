@@ -45,6 +45,34 @@ function mapUnrecoverableError(error: any, res: Response): boolean {
   return false;
 }
 
+function parseJobResult(result: unknown): {
+  data: unknown;
+  totalTokens?: number;
+  totalCostINR?: number;
+  durationMs?: number;
+} {
+  if (
+    result &&
+    typeof result === 'object' &&
+    'data' in result &&
+    (result as { data?: unknown }).data !== undefined
+  ) {
+    const envelope = result as {
+      data: unknown;
+      totalTokens?: number;
+      totalCostINR?: number;
+      durationMs?: number;
+    };
+    return {
+      data: envelope.data,
+      totalTokens: envelope.totalTokens,
+      totalCostINR: envelope.totalCostINR,
+      durationMs: envelope.durationMs,
+    };
+  }
+  return { data: result };
+}
+
 export class DocumentController {
   private docsQueueService = new DocsQueueService();
 
@@ -85,6 +113,9 @@ export class DocumentController {
           jobId: enqueueResult.contentJobId,
           correlationId: getCorrelationId(),
           data: enqueueResult.cachedResult,
+          totalTokens: 0,
+          totalCostINR: 0,
+          durationMs: 0,
         });
         return;
       }
@@ -100,14 +131,18 @@ export class DocumentController {
         return;
       }
 
-      const result = await this.docsQueueService.waitForJob(enqueueResult.job, enqueueResult.queueEvents);
+      const finished = await this.docsQueueService.waitForJob(enqueueResult.job, enqueueResult.queueEvents);
+      const { data, totalTokens, totalCostINR, durationMs } = parseJobResult(finished);
 
       res.status(200).json({
         success: true,
         message: 'Document extracted successfully.',
         jobId: enqueueResult.contentJobId,
         correlationId: getCorrelationId(),
-        data: result,
+        data,
+        ...(totalTokens != null ? { totalTokens } : {}),
+        ...(totalCostINR != null ? { totalCostINR } : {}),
+        ...(durationMs != null ? { durationMs } : {}),
       });
     } catch (error: any) {
       if (error instanceof QueueOverloadedError) {

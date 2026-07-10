@@ -17,7 +17,14 @@ function signAimoduleToken() {
   if (!_config.JWT_SECRET) {
     throw ApiError.badRequest('JWT_SECRET is not configured.');
   }
-  return jwt.sign({ id: 'test_user', role: 'Surveyor' }, _config.JWT_SECRET, { expiresIn: '1h' });
+  return jwt.sign(
+    {
+     id: 'test_user',
+      role: 'Surveyor'
+     },
+      _config.JWT_SECRET, 
+      { expiresIn: '1h' }
+    );
 }
 
 export class ExtractionService {
@@ -25,7 +32,7 @@ export class ExtractionService {
     documentType,
     uploadIds,
     urls: directUrls,
-    mode,
+    mode, 
     priority = 'normal',
     tableLayout,
     correlationId: providedCorrelationId,
@@ -117,6 +124,10 @@ export class ExtractionService {
         job.jobId = body.jobId ?? job.jobId;
         job.result = body.data ?? body.result ?? null;
         job.cached = Boolean(body.cached);
+        job.totalTokens = body.totalTokens ?? (body.cached ? 0 : undefined);
+        job.totalCostINR = body.totalCostINR ?? (body.cached ? 0 : undefined);
+        job.durationMs = body.durationMs ?? undefined;
+        job.completedAt = new Date();
         await job.save();
         return job;
       }

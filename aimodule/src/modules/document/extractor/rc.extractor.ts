@@ -7,6 +7,8 @@ import {
   extractStateCode,
   computeRCStatus,
   normaliseFinanceFields,
+  normaliseRCExtraction,
+  deriveHypothecation,
 } from '../utils/rc/rc.utils';
 import { ObserverService } from '../../../infrastructure/observabllity/observer.service.js';
 import {
@@ -50,28 +52,34 @@ export class RCExtractor {
 
     this.obs.info('RCExtractor: Raw extraction complete, applying normalizations...');
 
+    const cleaned = normaliseRCExtraction(rawResult as Record<string, unknown>);
+
     const stateHints = {
-      cardStateCode: rawResult.stateCode as string | null | undefined,
-      rtoCode: rawResult.rtoCode as string | null | undefined,
+      cardStateCode: cleaned.stateCode as string | null | undefined,
+      rtoCode: cleaned.rtoCode as string | null | undefined,
     };
     const finance = normaliseFinanceFields({
-      purpose: rawResult.purpose,
-      financeBank: rawResult.financeBank,
-      hypothecatedTo: rawResult.hypothecatedTo,
+      purpose: cleaned.purpose as string | null | undefined,
+      financeBank: cleaned.financeBank as string | null | undefined,
+      hypothecatedTo: cleaned.hypothecatedTo as string | null | undefined,
     });
+    const hypothecation = deriveHypothecation(finance);
 
     const derivedStateCode =
-      extractStateCode(rawResult.registrationNo, stateHints) ?? stateHints.cardStateCode ?? null;
+      extractStateCode(cleaned.registrationNo as string | null | undefined, stateHints) ??
+      stateHints.cardStateCode ??
+      null;
 
-    const derivedState = detectStateFromRegNo(rawResult.registrationNo, {
+    const derivedState = detectStateFromRegNo(cleaned.registrationNo as string | null | undefined, {
       ...stateHints,
       cardStateCode: derivedStateCode,
     });
-    const rcStatus = computeRCStatus(rawResult.regValidity);
+    const rcStatus = computeRCStatus(cleaned.regValidity as string | null | undefined);
 
     const mergedData = {
-      ...rawResult,
+      ...cleaned,
       ...finance,
+      hypothecation,
       state: derivedState,
       rcStatus,
     };
