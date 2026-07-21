@@ -1,0 +1,7 @@
+allowBuilds:
+  '@google/genai': false
+  '@newrelic/fn-inspect': false
+  '@newrelic/native-metrics': false
+  esbuild: false
+  msgpackr-extract: false
+  protobufjs: false
