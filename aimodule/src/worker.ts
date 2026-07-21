@@ -1,6 +1,5 @@
 //Dedicated worker process — run separately from API in production.
 
-import './instrument-otel.js';
 import './instrument.js';
 import { logger } from './utils/logger.js';
 

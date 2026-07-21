@@ -84,6 +84,11 @@ export class DocumentService {
             ObserverService.getInstance().logError('Failed to delete local PDF temp file', err);
           });
         }
+        if (fd?.localFilePath && fd.localFilePath !== fd.localPdfPath) {
+          fs.promises.unlink(fd.localFilePath).catch((err: any) => {
+            ObserverService.getInstance().logError('Failed to delete local file temp path', err);
+          });
+        }
       }
     }
   }

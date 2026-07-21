@@ -1,9 +1,7 @@
 import { Worker, Job } from 'bullmq';
-import { SpanStatusCode, trace } from '@opentelemetry/api';
 import { bullmqConnection } from '../connection.js';
-import { isOtelTracesEnabled } from '../../../instrument-otel.js';
 import {
-  RC_QUEUE_NAME, DL_QUEUE_NAME, WORKSHOP_QUEUE_NAME, INSURANCE_QUEUE_NAME,
+  RC_QUEUE_NAME, DL_QUEUE_NAME, WORKSHOP_QUEUE_NAME, INSURANCE_QUEUE_NAME, CLAIM_QUEUE_NAME,
   ALL_QUEUES,
 } from './queues.js';
 import { DocumentService } from '../../../modules/document/document.service.js';
@@ -20,7 +18,6 @@ const documentService = new DocumentService();
 const dlqService = new DLQService();
 const webhookService = new WebhookService();
 const obs = ObserverService.getInstance();
-const jobTracer = trace.getTracer('docs-intelligence-worker');
 
 // Circuit Breaker → pause / resume ALL four queues
 const breaker = AIService.getInstance().getBreaker();
@@ -197,35 +194,7 @@ const processDocumentJob = async (job: Job): Promise<any> => {
     }
   }, effectiveDocumentName, effectiveDocumentId);
 
-  if (!isOtelTracesEnabled()) {
-    return runJob();
-  }
-
-  return jobTracer.startActiveSpan(
-    'bullmq.extract',
-    {
-      attributes: {
-        'queue.name': job.queueName,
-        'document.type': type,
-        'job.id': job.id ?? '',
-        'correlation.id': effectiveCorrelationId,
-      },
-    },
-    async (span) => {
-      try {
-        const result = await runJob();
-        span.setStatus({ code: SpanStatusCode.OK });
-        return result;
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : 'Job failed';
-        span.setStatus({ code: SpanStatusCode.ERROR, message });
-        if (error instanceof Error) span.recordException(error);
-        throw error;
-      } finally {
-        span.end();
-      }
-    },
-  );
+  return runJob();
 };
 
 // make the failure handler
@@ -271,5 +240,14 @@ export const insuranceWorker = new Worker(INSURANCE_QUEUE_NAME, processDocumentJ
 });
 insuranceWorker.on('failed', makeFailureHandler(INSURANCE_QUEUE_NAME));
 
+// Claim Worker - HEAVY lane with Mistral OCR rate cap: 2 concurrent, 8 jobs/min
+export const claimWorker = new Worker(CLAIM_QUEUE_NAME, processDocumentJob, {
+  connection: bullmqConnection.duplicate() as any,
+  concurrency: 2,
+  limiter: { max: 8, duration: 60000 },
+  ...sharedWorkerOptions,
+});
+claimWorker.on('failed', makeFailureHandler(CLAIM_QUEUE_NAME));
+
 // log the workers initialization
-obs.info('All four document workers initialized: rc-queue, dl-queue, workshop-queue, insurance-queue');
+obs.info('All five document workers initialized: rc-queue, dl-queue, workshop-queue, insurance-queue, claim-queue');

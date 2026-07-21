@@ -9,7 +9,7 @@ const uploadSchema = new mongoose.Schema(
     size: { type: Number },
     purpose: {
       type: String,
-      enum: ['rc', 'dl', 'workshop', 'policy', 'other'],
+      enum: ['rc', 'dl', 'workshop', 'policy', 'claim', 'other'],
       default: 'other',
     },
   },

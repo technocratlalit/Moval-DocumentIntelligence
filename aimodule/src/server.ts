@@ -1,10 +1,9 @@
-import './instrument-otel.js';
 import './instrument.js';
 import App from './app.js';
 import { _config } from './config/config.js';
 import { logger } from './utils/logger.js';
 import { ObserverService } from './infrastructure/observabllity/observer.service.js';
-import { rcQueue, dlQueue, workshopQueue, insuranceQueue } from './infrastructure/queue/docs/queues.js';
+import { rcQueue, dlQueue, workshopQueue, insuranceQueue, claimQueue } from './infrastructure/queue/docs/queues.js';
 import { dlqQueue } from './infrastructure/queue/dlq/dlq.queue.js';
 
 const obs = ObserverService.getInstance();
@@ -15,6 +14,7 @@ function startQueueDepthPoller() {
     { q: dlQueue, name: 'dl-queue' },
     { q: workshopQueue, name: 'workshop-queue' },
     { q: insuranceQueue, name: 'insurance-queue' },
+    { q: claimQueue, name: 'claim-queue' },
     { q: dlqQueue, name: 'dead-letter-queue' },
   ];
 

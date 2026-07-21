@@ -194,6 +194,44 @@ const RC_QUALITY = [
   'invalidPageIndices', 'confidenceScore', 'requiresHumanReview', 'lowConfidenceFields',
 ]
 
+// ── Claim form fields ─────────────────────────────────────────────────────────
+const CLAIM_OVERVIEW = [
+  'insurerCode', 'insurerName', 'policyNo', 'claimNo', 'registrationNo',
+  'insuredName', 'dateOfLoss', 'placeOfAccident', 'natureOfLoss',
+]
+const CLAIM_INSURED = [
+  'insuredName', 'insuredNameNative', 'insuredAddress', 'insuredAddressNative',
+  'pinCode', 'mobileNo', 'email', 'panNo',
+  'bankAccountHolder', 'bankAccountNo', 'bankIfscCode',
+]
+const CLAIM_VEHICLE = [
+  'registrationNo', 'vehicleMake', 'vehicleYear', 'engineNo', 'chassisNo',
+  'vehicleClass', 'cubicCapacity',
+]
+const CLAIM_LOSS = [
+  'dateOfLoss', 'timeOfLoss', 'placeOfAccident', 'natureOfLoss',
+  'accidentDescription', 'accidentDescriptionEnglish', 'vehicleSpeedAtAccident',
+  'estimatedRepairCost', 'idv', 'inspectionLocation', 'damageDescription',
+  'dateOfIntimation', 'insurancePeriodStart', 'insurancePeriodEnd', 'coverNoteNo',
+]
+const CLAIM_DRIVER = [
+  'driverName', 'driverAgeOrDob', 'driverAddress', 'driverRelationship',
+  'drivingLicenseNo', 'licenseIssuingAuthority', 'licenseExpiryDate',
+  'licenseClass', 'alcoholInfluence',
+]
+const CLAIM_POLICE = [
+  'policeReportLodged', 'firNo', 'policeStationName', 'firDate',
+  'thirdPartyInjury', 'thirdPartyDeath', 'thirdPartyPropertyDamage',
+  'thirdPartyDetails', 'witnessDetails',
+]
+const CLAIM_QUALITY = [
+  'isCorrectDocumentType', 'detectedDocumentType', 'hasAllPagesCorrectType',
+  'invalidPageIndices', 'confidenceScore', 'requiresHumanReview', 'lowConfidenceFields',
+  'templateVersion', 'declarationDate', 'declarationPlace', 'signaturePresent',
+  'commercialPermitNo', 'commercialFitnessCert', 'commercialLadenWeight',
+  'commercialSectionNotApplicable',
+]
+
 // ── Policy fields (strict spec — human-readable labels) ───────────────────────
 const POLICY_OVERVIEW = [
   { key: 'policyNumber', label: 'Policy No.' },
@@ -338,7 +376,11 @@ function policyFieldTab(id, label, source, specs) {
 function extraFieldsTab(result) {
   const rows = result?.extraFields ?? []
   if (!Array.isArray(rows) || rows.length === 0) return null
-  return tableTab('extra', 'Extra fields', formatTableRows(rows), ['key', 'value'])
+  const hasMapping = rows.some((r) => r.matchedCanonicalField != null || r.matchMethod)
+  const columns = hasMapping
+    ? ['key', 'value', 'matchedCanonicalField', 'matchMethod', 'confidence', 'sourcePage']
+    : ['key', 'value']
+  return tableTab('extra', 'Extra fields', formatTableRows(rows), columns)
 }
 
 /** Build doc-type-specific tabs for the extraction inspect dialog. */
@@ -425,6 +467,41 @@ export function buildInspectViews(documentType, result) {
         jsonTab,
       ].filter(Boolean)
       return { tabs, defaultTab: isSequential ? 'lineItems' : 'parts' }
+    }
+
+    case 'CLAIM': {
+      const metaRows = result.extractionMeta
+        ? [
+            { key: 'OCR pairs', value: formatFieldValue(result.extractionMeta.ocrPairCount) },
+            { key: 'OCR engine', value: formatFieldValue(result.extractionMeta.ocrEngine) },
+            { key: 'OCR model', value: formatFieldValue(result.extractionMeta.ocrModel) },
+            { key: 'Page count', value: formatFieldValue(result.extractionMeta.pageCount) },
+            { key: 'OCR confidence', value: formatFieldValue(result.extractionMeta.averageOcrConfidence) },
+            { key: 'Low-confidence words', value: formatFieldValue(result.extractionMeta.lowConfidenceWordCount) },
+            { key: 'Template', value: formatFieldValue(result.extractionMeta.templateVersion) },
+            { key: 'OCR route', value: formatFieldValue(result.extractionMeta.ocrRoute) },
+            { key: 'Alias mapped', value: formatFieldValue(result.extractionMeta.aliasMappedCount) },
+            { key: 'Unmapped pairs', value: formatFieldValue(result.extractionMeta.unmappedPairCount) },
+            { key: 'Raw pairs stored', value: formatFieldValue(result.extractionMeta.rawPairs?.length) },
+            { key: 'Gemini fallback', value: formatFieldValue(result.extractionMeta.geminiFallbackUsed) },
+          ]
+        : [];
+      const tabs = [
+        fieldTab('overview', 'Overview', pickFieldRows(result, CLAIM_OVERVIEW)),
+        fieldTab('insured', 'Insured', pickFieldRows(result, CLAIM_INSURED)),
+        fieldTab('vehicle', 'Vehicle', pickFieldRows(result, CLAIM_VEHICLE)),
+        fieldTab('loss', 'Loss', pickFieldRows(result, CLAIM_LOSS)),
+        fieldTab('driver', 'Driver', pickFieldRows(result, CLAIM_DRIVER)),
+        fieldTab('police', 'Police', pickFieldRows(result, CLAIM_POLICE)),
+        fieldTab('quality', 'Quality', [
+          ...pickFieldRows(result, CLAIM_QUALITY),
+          ...metaRows,
+        ]),
+        extraFieldsTab(result),
+        allTab,
+        jsonTab,
+      ].filter(Boolean)
+      return { tabs, defaultTab: 'overview' }
     }
 
     default:

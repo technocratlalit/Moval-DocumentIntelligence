@@ -23,8 +23,12 @@ export interface FetchedFileResult {
   fileData: { fileUri: string; mimeType: string };
   /** Internal PDF page count from pdf-lib; 1 for images */
   pageCount: number;
+  /** Original URL — passed to Mistral OCR as document_url when public */
+  sourceUrl: string;
   /** Temp PDF kept for workshop page-slice passes; cleaned up by DocumentService */
   localPdfPath?: string;
+  /** Temp path for PDF or image — kept until job cleanup for Mistral OCR base64 fallback */
+  localFilePath?: string;
   /** Set by prescreen when scan is blurry or low-confidence but still readable */
   qualityHint?: FileQualityHint;
 }
@@ -181,16 +185,12 @@ export async function fetchFileFromUrl(url: string): Promise<FetchedFileResult> 
       return {
         fileData: { fileUri, mimeType },
         pageCount,
+        sourceUrl: url,
+        localFilePath: tempFilePath,
         ...(isPDF ? { localPdfPath: tempFilePath } : {}),
       };
     } finally {
-      if (!isPDF) {
-        try {
-          await fs.promises.unlink(tempFilePath);
-        } catch (err: any) {
-          obs.logError('Failed to delete temp file', err);
-        }
-      }
+      // Temp files cleaned up by DocumentService after extraction
     }
   } catch (error: any) {
     if (error instanceof UnrecoverableDocumentError) throw error;

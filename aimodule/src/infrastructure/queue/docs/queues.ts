@@ -17,6 +17,7 @@ export const RC_QUEUE_NAME = 'rc-queue';
 export const DL_QUEUE_NAME = 'dl-queue';
 export const WORKSHOP_QUEUE_NAME = 'workshop-queue';
 export const INSURANCE_QUEUE_NAME = 'insurance-queue';
+export const CLAIM_QUEUE_NAME = 'claim-queue';
 
 export const rcQueue = new Queue(RC_QUEUE_NAME, {
   connection: bullmqConnection as any,
@@ -46,6 +47,13 @@ export const insuranceQueue = new Queue(INSURANCE_QUEUE_NAME, {
   skipVersionCheck: true,
 });
 
+export const claimQueue = new Queue(CLAIM_QUEUE_NAME, {
+  connection: bullmqConnection as any,
+  prefix: PREFIX,
+  defaultJobOptions: sharedJobOptions,
+  skipVersionCheck: true,
+});
+
 export const rcQueueEvents = new QueueEvents(RC_QUEUE_NAME, {
   connection: bullmqConnection.duplicate() as any,
   prefix: PREFIX,
@@ -66,8 +74,13 @@ export const insuranceQueueEvents = new QueueEvents(INSURANCE_QUEUE_NAME, {
   prefix: PREFIX,
   skipVersionCheck: true,
 });
+export const claimQueueEvents = new QueueEvents(CLAIM_QUEUE_NAME, {
+  connection: bullmqConnection.duplicate() as any,
+  prefix: PREFIX,
+  skipVersionCheck: true,
+});
 
-export const ALL_QUEUES = [rcQueue, dlQueue, workshopQueue, insuranceQueue] as const;
+export const ALL_QUEUES = [rcQueue, dlQueue, workshopQueue, insuranceQueue, claimQueue] as const;
 
 interface RouterResult {
   queue: Queue;
@@ -104,6 +117,13 @@ export function resolveQueue(type: string): RouterResult {
         queue: insuranceQueue,
         queueName: INSURANCE_QUEUE_NAME,
         queueEvents: insuranceQueueEvents,
+        defaultPriority: _config.QUEUE_PRIORITY_HEAVY,
+      };
+    case 'CLAIM':
+      return {
+        queue: claimQueue,
+        queueName: CLAIM_QUEUE_NAME,
+        queueEvents: claimQueueEvents,
         defaultPriority: _config.QUEUE_PRIORITY_HEAVY,
       };
     default:

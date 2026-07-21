@@ -5,6 +5,7 @@ export const DOC_TYPES = [
   { id: 'DL', label: 'DL', purpose: 'dl' },
   { id: 'WORKSHOP', label: 'Workshop', purpose: 'workshop' },
   { id: 'POLICY', label: 'Insurance Policy', purpose: 'policy' },
+  { id: 'CLAIM', label: 'Claim Form', purpose: 'claim' },
 ]
 
 export function getDocMeta(type) {
@@ -69,6 +70,14 @@ export function rowSummary(job) {
         confidence: p.confidenceScore,
       }
     }
+    case 'CLAIM':
+      return {
+        fileName,
+        primary: r.policyNo ?? '—',
+        secondary: r.insuredName ?? '—',
+        tertiary: r.dateOfLoss ?? r.registrationNo ?? '—',
+        confidence: r.confidenceScore,
+      }
     default:
       return { fileName, primary: '—', secondary: '—', tertiary: '—', confidence: null }
   }

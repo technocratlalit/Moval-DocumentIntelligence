@@ -5,7 +5,9 @@ import { extractPdfPages } from '../../../utils/pdf.util.js';
 export interface PdfFileInput {
   fileData?: { fileUri: string; mimeType: string };
   pageCount?: number;
+  sourceUrl?: string;
   localPdfPath?: string;
+  localFilePath?: string;
 }
 
 export function normalizePageList(indices: unknown, pageCount: number): number[] {

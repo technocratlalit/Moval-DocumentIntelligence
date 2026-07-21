@@ -3,7 +3,6 @@ import type { TransportTargetOptions } from 'pino';
 import { _config } from '../config/config.js';
 
 const isDev = _config.NODE_ENV === 'development' || _config.NODE_ENV === 'dev';
-const otelLogsEnabled = _config.OTEL_LOGS_ENABLED === true;
 
 function buildTransport(): pino.LoggerOptions['transport'] | undefined {
   const targets: TransportTargetOptions[] = [];
@@ -24,19 +23,6 @@ function buildTransport(): pino.LoggerOptions['transport'] | undefined {
       target: 'pino/file',
       level: 'info',
       options: { destination: 1 },
-    });
-  }
-
-  if (otelLogsEnabled) {
-    targets.push({
-      target: 'pino-opentelemetry-transport',
-      level: 'info',
-      options: {
-        resourceAttributes: {
-          'service.name': _config.OTEL_SERVICE_NAME,
-          'deployment.environment': _config.NODE_ENV ?? 'development',
-        },
-      },
     });
   }
 

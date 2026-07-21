@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const extractionJobSchema = new mongoose.Schema(
   {
     correlationId: { type: String, required: true, unique: true },
-    documentType: { type: String, enum: ['RC', 'DL', 'WORKSHOP', 'POLICY'], required: true },
+    documentType: { type: String, enum: ['RC', 'DL', 'WORKSHOP', 'POLICY', 'CLAIM'], required: true },
     uploadIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Upload' }],
     urls: [{ type: String }],
     mode: { type: String, enum: ['sync', 'async'], default: 'sync' },

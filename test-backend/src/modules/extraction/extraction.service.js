@@ -7,7 +7,7 @@ import { Upload } from '../../model/upload.schema.js';
 import { _config } from '../../config/config.js';
 import { ApiError } from '../../shared/apiError.js';
 
-const VALID_TYPES = ['RC', 'DL', 'WORKSHOP', 'POLICY'];
+const VALID_TYPES = ['RC', 'DL', 'WORKSHOP', 'POLICY', 'CLAIM'];
 
 function defaultMode(documentType) {
   return documentType === 'RC' || documentType === 'DL' ? 'sync' : 'async';

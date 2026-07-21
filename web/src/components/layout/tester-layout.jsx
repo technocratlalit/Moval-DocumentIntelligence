@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { CarFrontIcon, FileTextIcon, LogOutIcon, ShieldCheckIcon, WrenchIcon } from 'lucide-react'
+import { CarFrontIcon, ClipboardListIcon, FileTextIcon, LogOutIcon, ShieldCheckIcon, WrenchIcon } from 'lucide-react'
 import { useTesterAuth } from '@/store/tester-auth.store'
 import { testTesterHealth } from '@/api/test-backend'
 import { HealthBadge } from '@/components/health/health-status'
@@ -27,6 +27,7 @@ const navItems = [
   { to: '/test/dl',       label: 'Driving Licence', icon: FileTextIcon,       end: false },
   { to: '/test/workshop', label: 'Workshop Bill',   icon: WrenchIcon,         end: false },
   { to: '/test/policy',   label: 'Insurance Policy',icon: ShieldCheckIcon,    end: false },
+  { to: '/test/claim',    label: 'Claim Form',      icon: ClipboardListIcon,  end: false },
 ]
 
 export function TesterLayout() {
