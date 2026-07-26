@@ -1,7 +1,5 @@
 FROM node:22-alpine AS build
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /app
 
 ARG VITE_ADMIN_API_URL=
@@ -10,7 +8,9 @@ ARG VITE_TESTER_API_URL=
 ENV VITE_ADMIN_API_URL=$VITE_ADMIN_API_URL
 ENV VITE_TESTER_API_URL=$VITE_TESTER_API_URL
 
-COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 RUN pnpm config set minimumReleaseAge 0 \
   && pnpm config set dangerouslyAllowAllBuilds true \
   && pnpm install --frozen-lockfile

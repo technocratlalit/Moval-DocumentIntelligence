@@ -13,6 +13,7 @@ docker-compose.override.yml
 docker-compose.local.yml
 
 # ─── Node.js — aimodule, test-backend, web ───────────────────────────────────
+/node_modules/
 node_modules/
 **/node_modules/
 .pnpm-store/

@@ -2,13 +2,13 @@ FROM node:22-alpine AS runtime
 
 RUN apk add --no-cache curl
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 RUN pnpm config set minimumReleaseAge 0 \
   && pnpm config set dangerouslyAllowAllBuilds true \
   && pnpm install --frozen-lockfile --prod
