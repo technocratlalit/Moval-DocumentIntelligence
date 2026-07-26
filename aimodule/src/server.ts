@@ -49,7 +49,7 @@ const start = async () => {
     await loadWorkers();
 
     const app = new App().getApp();
-    const PORT = _config.PORT ?? 8080;
+    const PORT = _config.PORT ?? 3000;
 
     app.listen(PORT, () => {
       logger.info(`Server is running on port ${PORT}`);
