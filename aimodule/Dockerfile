@@ -3,11 +3,11 @@ FROM node:22-bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 RUN pnpm config set minimumReleaseAge 0 \
   && pnpm config set dangerouslyAllowAllBuilds true \
   && pnpm install --frozen-lockfile
@@ -15,20 +15,20 @@ RUN pnpm config set minimumReleaseAge 0 \
 COPY tsconfig.json ./
 COPY src ./src
 
-RUN pnpm build
+RUN pnpm run build
 
 FROM node:22-bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
   && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json pnpm-lock.yaml ./
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
 RUN pnpm config set minimumReleaseAge 0 \
   && pnpm config set dangerouslyAllowAllBuilds true \
   && pnpm install --frozen-lockfile --prod
