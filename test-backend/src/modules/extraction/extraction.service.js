@@ -202,9 +202,10 @@ export class ExtractionService {
       id: job._id,
       status: job.status,
       canonicalJson: job.result,
-      display: job.result?.display ?? null,
-      flaggedFields: job.flaggedFields ?? job.result?.extractionMeta?.flaggedFields ?? [],
-      fieldConfidence: job.fieldConfidence ?? [],
+      flaggedFields: job.flaggedFields ?? (job.result?.humanReviewFields ?? []).map((path) => ({
+        path,
+        reason: 'human review',
+      })),
       fileUrl: upload?.url ?? job.urls?.[0] ?? null,
       reviewCorrections: job.reviewCorrections ?? [],
     };

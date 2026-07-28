@@ -1,17 +1,28 @@
 /** Persist CLAIM-specific fields from aimodule extraction result onto ExtractionJob. */
 export function applyClaimFields(job, result) {
   if (!result || job.documentType !== 'CLAIM') return;
-  const meta = result.meta ?? {};
+  const meta = result.additionalData ?? {};
+
   job.claimMeta = {
-    insurer: meta.source_insurer,
-    templateVersion: meta.source_template_version,
-    formLanguage: meta.form_language,
+    insurer: result.insurerName ?? null,
+    policyNumber: result.policyNumber ?? null,
+    claimNumber: result.claimNumber ?? null,
   };
-  job.pipelineStatus = result.extractionMeta?.pipelineStatus ?? result.status;
-  job.rawExtractions = result.extractionMeta?.rawExtractions ?? [];
-  job.fieldConfidence = result.extractionMeta?.fieldConfidence ?? [];
-  job.flaggedFields = result.extractionMeta?.flaggedFields ?? result.flaggedFields ?? [];
-  if (result.status === 'needs_review' || result.requiresHumanReview) {
+  job.flaggedFields = (meta.humanReviewFields ?? result.humanReviewFields ?? []).map((path) => ({
+    path,
+    reason: 'human review',
+  }));
+  if (meta.requiresHumanReview ?? result.requiresHumanReview) {
     job.status = 'needs_review';
+  }
+
+  const rawGemini = result.extractedPdfData?.rawGemini;
+  if (rawGemini != null) {
+    job.rawExtractions = job.rawExtractions ?? [];
+    job.rawExtractions.push({
+      sourceModel: meta.model ?? 'gemini',
+      rawJson: rawGemini,
+      createdAt: new Date(),
+    });
   }
 }

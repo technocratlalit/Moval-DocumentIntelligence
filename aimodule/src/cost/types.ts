@@ -53,17 +53,8 @@ export interface JobContext {
     totalCostUsd: number;
     totalCostINR: number;
     totalSavingsUsd: number;
-    mistralOcrPages: number;
-    mistralOcrCostUsd: number;
     calls: AICallRecord[];
   };
-}
-
-export interface MistralOcrCallRecord {
-  pages: number;
-  costUsd: number;
-  latencyMs: number;
-  status: 'success' | 'failure';
 }
 
 export interface CostBreakdown {

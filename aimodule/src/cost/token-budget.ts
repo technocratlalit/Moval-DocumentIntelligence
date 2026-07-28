@@ -27,3 +27,10 @@ export function computePolicyMaxTokens(pageCount: number, envCeiling?: string): 
   const floor = 16384;
   return Math.min(ceiling, Math.max(floor, pageCount * perPage));
 }
+
+export function computeClaimMaxTokens(pageCount: number, envCeiling?: string): number {
+  const ceiling = parseCeiling(envCeiling, 8192);
+  const perPage = 2048;
+  const floor = 4096;
+  return Math.min(ceiling, Math.max(floor, pageCount * perPage));
+}

@@ -17,7 +17,7 @@ Same `docker-compose.yml` for local dev and production.
   - **MongoDB** — portal user/session data
   - **Google Cloud Storage** — aimodule file staging
   - **Cloudflare R2** — portal file uploads
-  - **Gemini API key** — document extraction
+  - **Gemini API key** — document extraction (RC, DL, workshop, policy, claim forms)
   - **New Relic license key** — observability
 
 ## Setup
@@ -31,6 +31,7 @@ Same `docker-compose.yml` for local dev and production.
    Edit `.env` and fill every value. Required highlights:
    - `PUBLIC_URL` — public URL users open (e.g. `https://docs.yourdomain.com`)
    - `GEMINI_API_KEY` and model slugs (`AI_MODEL`, `AI_MODEL_LITE`, `AI_MODEL_PRO`)
+   - `CLAIM_AI_MODEL` — claim form extraction (default `gemini-2.5-flash-lite` in `.env.sample`)
    - `GCS_*` credentials
    - `DATABASE_URI`, `R2_*`
    - `JWT_SECRET`, `WEBHOOK_SECRET`, `SESSION_SECRET`, `ADMIN_API_KEY` — use strong random values

@@ -1,6 +1,6 @@
 import { correlationStore } from '../shared/context/correlation.context.js';
 import { _config } from '../config/config.js';
-import type { AICallRecord, JobContext, JobCostSummary, MistralOcrCallRecord } from './types.js';
+import type { AICallRecord, JobContext, JobCostSummary } from './types.js';
 
 /** Safe API key identifier for logs — never log full key. */
 export function getGeminiApiKeyLabel(): string {
@@ -33,24 +33,9 @@ export function createJobContext(
       totalCostUsd: 0,
       totalCostINR: 0,
       totalSavingsUsd: 0,
-      mistralOcrPages: 0,
-      mistralOcrCostUsd: 0,
       calls: [],
     },
   };
-}
-
-export function recordMistralOcrCall(record: MistralOcrCallRecord): void {
-  const store = correlationStore.getStore();
-  if (!store?.cost) return;
-
-  if (record.status === 'success') {
-    store.cost.mistralOcrPages += record.pages;
-    store.cost.mistralOcrCostUsd += record.costUsd;
-    const usdToInr = parseFloat(_config.USD_TO_INR ?? '84');
-    store.cost.totalCostUsd += record.costUsd;
-    store.cost.totalCostINR += record.costUsd * usdToInr;
-  }
 }
 
 export function getDocumentType(): string {

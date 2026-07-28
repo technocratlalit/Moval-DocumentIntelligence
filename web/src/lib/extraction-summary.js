@@ -70,20 +70,14 @@ export function rowSummary(job) {
         confidence: p.confidenceScore,
       }
     }
-    case 'CLAIM': {
-      const d = r.display ?? {}
-      const p = r.policy_details ?? {}
-      const i = r.insured_details ?? {}
-      const v = r.vehicle_details ?? {}
-      const l = r.loss_details ?? {}
+    case 'CLAIM':
       return {
         fileName,
-        primary: d.policy_no ?? p.policy_no ?? '—',
-        secondary: d.insured_name ?? i.name ?? '—',
-        tertiary: d.date_of_accident ?? l.date_of_loss ?? d.vehicle_regd_no ?? v.registration_no ?? '—',
-        confidence: r.confidenceScore,
+        primary: r.policyNumber ?? '—',
+        secondary: r.insuredName ?? '—',
+        tertiary: r.accidentDate ?? r.registrationNo ?? '—',
+        confidence: r.additionalData?.confidenceScore ?? r.confidenceScore,
       }
-    }
     default:
       return { fileName, primary: '—', secondary: '—', tertiary: '—', confidence: null }
   }

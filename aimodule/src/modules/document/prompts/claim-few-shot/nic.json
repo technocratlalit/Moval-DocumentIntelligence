@@ -1,9 +1,0 @@
-[
-  {
-    "input_excerpt": "INSURED DETAILS\nName: YASH GUPTA\nAddress: FLAT-101 SHAKTI APARTMENT JORAPHTAK ROAD, DHANBAD\nMobile: 9431551757\n\nLOSS DETAILS\nDate of Accident: 21/11/2024 at 10:05 A.M.\nPlace: Near Railway Phatak, Baghmara Block\nType of Loss: Damage (ticked)\nEstimated Cost: 1,05,922/-",
-    "output": {
-      "insured_details": { "name": "YASH GUPTA", "address": "FLAT-101 SHAKTI APARTMENT JORAPHTAK ROAD, DHANBAD", "mobile": "9431551757" },
-      "loss_details": { "date_of_loss": "21/11/2024", "time_of_loss": "10:05 A.M.", "place_of_loss_accident": "Near Railway Phatak, Baghmara Block", "type_of_loss": "Damage", "estimated_cost_of_repairs": "1,05,922/-" }
-    }
-  }
-]
