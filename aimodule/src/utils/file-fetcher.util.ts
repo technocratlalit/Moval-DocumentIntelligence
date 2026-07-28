@@ -23,11 +23,11 @@ export interface FetchedFileResult {
   fileData: { fileUri: string; mimeType: string };
   /** Internal PDF page count from pdf-lib; 1 for images */
   pageCount: number;
-  /** Original URL — passed to Mistral OCR as document_url when public */
+  /** Original URL for re-fetch or external OCR when needed */
   sourceUrl: string;
   /** Temp PDF kept for workshop page-slice passes; cleaned up by DocumentService */
   localPdfPath?: string;
-  /** Temp path for PDF or image — kept until job cleanup for Mistral OCR base64 fallback */
+  /** Temp path for PDF or image; cleaned up by DocumentService */
   localFilePath?: string;
   /** Set by prescreen when scan is blurry or low-confidence but still readable */
   qualityHint?: FileQualityHint;

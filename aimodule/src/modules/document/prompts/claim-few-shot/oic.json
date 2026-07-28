@@ -1,0 +1,18 @@
+[
+  {
+    "input_excerpt": "Policy No: 332703/31/2025/2928\nPeriod of Insurance: 15.01.2025 to 14.01.2026\nInsured Name: NAND KUMAR\nVehicle Regn No: JH09V7182\n\n## 5. DETAILS OF ACCIDENT\n| (a) Date & Time | : | 18.06.2026 at 10:30 AM |\n| (b) Place | : | Steel Gate, Saridhela |\n| (c) Speed of your vehicle at the time of accident | : | 30 KM |\n| (d) Give a short description of the accident | : | Left side and rear portion damaged due to hit by auto and bike |\n| (e) If any third party was responsible | : | No |",
+    "output": {
+      "policy_details": { "policy_no": "332703/31/2025/2928", "period_of_insurance_from": "15.01.2025", "period_of_insurance_to": "14.01.2026" },
+      "insured_details": { "name": "NAND KUMAR" },
+      "vehicle_details": { "registration_no": "JH09V7182" },
+      "loss_details": {
+        "date_of_loss": "18.06.2026",
+        "time_of_loss": "10:30 AM",
+        "place_of_loss_accident": "Steel Gate, Saridhela",
+        "speed_of_vehicle_at_accident": "30 KM",
+        "brief_description_of_accident": "Left side and rear portion damaged due to hit by auto and bike",
+        "third_party_responsible_name_address": "No"
+      }
+    }
+  }
+]

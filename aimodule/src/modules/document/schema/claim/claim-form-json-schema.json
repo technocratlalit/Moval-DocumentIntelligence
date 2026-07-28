@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CanonicalClaim",
+  "description": "Canonical motor insurance claim form — UIIC, OIC, NIAC, NIC. Preserve original language. Use null when no data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "meta", "company_details", "policy_details", "insured_details", "vehicle_details",
+    "commercial_vehicle_info", "loss_details", "driver_details", "other_insurance_details",
+    "damage_to_insured_vehicle", "workshop_details", "third_party_details",
+    "injury_death_to_driver_occupant", "police_fir_details", "witness_details",
+    "theft_details", "add_on_covers", "past_claims", "declaration"
+  ],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "properties": {
+        "source_insurer": { "type": ["string", "null"], "enum": ["UIIC", "OIC", "NIAC", "NIC", null] },
+        "source_template_version": { "type": ["string", "null"] },
+        "form_language": { "type": ["string", "null"], "enum": ["hindi", "english", "mixed", null] },
+        "extraction_confidence": { "type": ["number", "null"] }
+      }
+    },
+    "company_details": {
+      "type": "object",
+      "properties": {
+        "company_name": { "type": ["string", "null"] },
+        "registered_office_address": { "type": ["string", "null"] },
+        "divisional_branch_office": { "type": ["string", "null"] },
+        "office_code": { "type": ["string", "null"] },
+        "telephone_no": { "type": ["string", "null"] }
+      }
+    },
+    "policy_details": {
+      "type": "object",
+      "properties": {
+        "policy_no": { "type": ["string", "null"] },
+        "cover_note_no": { "type": ["string", "null"] },
+        "certificate_no": { "type": ["string", "null"] },
+        "claim_no": { "type": ["string", "null"] },
+        "period_of_insurance_from": { "type": ["string", "null"] },
+        "period_of_insurance_to": { "type": ["string", "null"] },
+        "gst_no": { "type": ["string", "null"] }
+      }
+    },
+    "insured_details": {
+      "type": "object",
+      "properties": {
+        "insured_type": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "address": { "type": ["string", "null"] },
+        "pin_code": { "type": ["string", "null"] },
+        "mobile": { "type": ["string", "null"] },
+        "landline": { "type": ["string", "null"] },
+        "email": { "type": ["string", "null"] },
+        "pan_no": { "type": ["string", "null"] },
+        "aadhar_no": { "type": ["string", "null"] },
+        "bank_ac_particulars": {
+          "type": ["object", "null"],
+          "properties": {
+            "bank_name": { "type": ["string", "null"] },
+            "branch_name": { "type": ["string", "null"] },
+            "account_no": { "type": ["string", "null"] },
+            "account_type": { "type": ["string", "null"] },
+            "ifsc_code": { "type": ["string", "null"] },
+            "micr_code": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "vehicle_details": {
+      "type": "object",
+      "properties": {
+        "registration_no": { "type": ["string", "null"] },
+        "registration_no_normalized": { "type": ["string", "null"] },
+        "make": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "year": { "type": ["string", "null"] },
+        "engine_no": { "type": ["string", "null"] },
+        "chassis_no": { "type": ["string", "null"] },
+        "cubic_carrying_capacity": { "type": ["string", "null"] },
+        "hypothecation_details": { "type": ["string", "null"] },
+        "vehicle_in_working_condition": { "type": ["string", "null"] },
+        "purpose_of_use_at_accident_time": { "type": ["string", "null"] },
+        "trailer_attached": { "type": ["string", "null"] },
+        "motorcycle_sidecar_attached": { "type": ["string", "null"] },
+        "pillion_rider_carried": { "type": ["string", "null"] },
+        "no_of_occupants_carried": { "type": ["string", "null"] }
+      }
+    },
+    "commercial_vehicle_info": { "type": "object" },
+    "loss_details": {
+      "type": "object",
+      "properties": {
+        "date_of_loss": { "type": ["string", "null"] },
+        "date_of_loss_iso": { "type": ["string", "null"] },
+        "time_of_loss": { "type": ["string", "null"] },
+        "place_of_loss_accident": { "type": ["string", "null"] },
+        "type_of_loss": { "type": ["string", "null"] },
+        "speed_of_vehicle_at_accident": { "type": ["string", "null"] },
+        "brief_description_of_accident": { "type": ["string", "null"] },
+        "estimated_cost_of_repairs": { "type": ["string", "null"] },
+        "estimated_cost_of_repairs_numeric": { "type": ["number", "null"] },
+        "third_party_responsible_name_address": { "type": ["string", "null"] }
+      }
+    },
+    "driver_details": { "type": "object" },
+    "other_insurance_details": { "type": ["string", "null"] },
+    "damage_to_insured_vehicle": { "type": "object" },
+    "workshop_details": { "type": "object" },
+    "third_party_details": { "type": "object" },
+    "injury_death_to_driver_occupant": { "type": "object" },
+    "police_fir_details": { "type": "object" },
+    "witness_details": { "type": "object" },
+    "theft_details": { "type": "object" },
+    "add_on_covers": { "type": "object" },
+    "past_claims": { "type": "object" },
+    "declaration": {
+      "type": "object",
+      "properties": {
+        "date": { "type": ["string", "null"] },
+        "date_iso": { "type": ["string", "null"] },
+        "place": { "type": ["string", "null"] },
+        "signature_of_insured": { "type": ["string", "null"] },
+        "signature_present": { "type": ["boolean", "null"] }
+      }
+    }
+  }
+}

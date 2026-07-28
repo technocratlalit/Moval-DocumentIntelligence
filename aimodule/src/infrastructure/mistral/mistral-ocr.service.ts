@@ -3,11 +3,7 @@ import axios from 'axios';
 import { _config } from '../../config/config.js';
 import { ObserverService } from '../observabllity/observer.service.js';
 import { recordMistralOcrCall } from '../../cost/tracker.js';
-import type {
-  MistralOcrInput,
-  MistralOcrPage,
-  MistralOcrResult,
-} from './mistral-ocr.types.js';
+import type { MistralOcrInput, MistralOcrPage, MistralOcrResult } from './mistral-ocr.types.js';
 
 const OCR_ENDPOINT = 'https://api.mistral.ai/v1/ocr';
 
@@ -78,9 +74,6 @@ export class MistralOcrService {
       const confidences = pages
         .map((p) => p.confidence_scores?.average_page_confidence_score)
         .filter((c): c is number => typeof c === 'number');
-      const averageConfidence = confidences.length
-        ? confidences.reduce((a, b) => a + b, 0) / confidences.length
-        : null;
 
       const lowConfidenceWordCount = pages.reduce((sum, p) => {
         const words = p.confidence_scores?.word_confidence_scores ?? [];
@@ -88,18 +81,18 @@ export class MistralOcrService {
       }, 0);
 
       const costUsd = pageCount * _config.MISTRAL_COST_PER_PAGE_USD;
+      const latencyMs = Date.now() - start;
+
       recordMistralOcrCall({
         pages: pageCount,
         costUsd,
-        latencyMs: Date.now() - start,
+        latencyMs,
         status: 'success',
       });
 
       this.obs.info('MistralOcrService: OCR complete', {
         pageCount,
-        model: data.model,
-        signaturePresent,
-        averageConfidence,
+        latencyMs,
         lowConfidenceWordCount,
       });
 
@@ -107,54 +100,33 @@ export class MistralOcrService {
         pages,
         model: String(data.model ?? _config.MISTRAL_OCR_MODEL),
         pageCount,
-        latencyMs: Date.now() - start,
+        latencyMs,
         signaturePresent,
-        averageConfidence,
+        averageConfidence: confidences.length
+          ? confidences.reduce((a, b) => a + b, 0) / confidences.length
+          : null,
         lowConfidenceWordCount,
       };
     } catch (err: unknown) {
-      recordMistralOcrCall({
-        pages: 0,
-        costUsd: 0,
-        latencyMs: Date.now() - start,
-        status: 'failure',
-      });
+      const latencyMs = Date.now() - start;
       const msg = err instanceof Error ? err.message : String(err);
+      recordMistralOcrCall({ pages: 0, costUsd: 0, latencyMs, status: 'failure' });
       throw new Error(`Mistral OCR failed: ${msg}`);
     }
   }
 
   private async buildDocumentPayload(
     input: MistralOcrInput,
-  ): Promise<Record<string, string>> {
-    const mime = (input.mimeType ?? 'application/pdf').toLowerCase();
-    const isImage = mime.startsWith('image/');
-
+  ): Promise<{ type: string; document_url?: string; document_base64?: string }> {
     if (input.sourceUrl) {
-      if (isImage) {
-        return { type: 'image_url', image_url: input.sourceUrl };
-      }
       return { type: 'document_url', document_url: input.sourceUrl };
     }
-
-    const localPath = input.localFilePath;
-    if (!localPath) {
-      throw new Error('Mistral OCR requires sourceUrl or localFilePath');
+    if (input.localFilePath) {
+      const buf = await fs.readFile(input.localFilePath);
+      const b64 = buf.toString('base64');
+      const mime = input.mimeType ?? 'application/pdf';
+      return { type: 'document_base64', document_base64: `data:${mime};base64,${b64}` };
     }
-
-    const buf = await fs.readFile(localPath);
-    const b64 = buf.toString('base64');
-
-    if (isImage) {
-      return {
-        type: 'image_url',
-        image_url: `data:${mime};base64,${b64}`,
-      };
-    }
-
-    return {
-      type: 'document_url',
-      document_url: `data:application/pdf;base64,${b64}`,
-    };
+    throw new Error('Mistral OCR requires sourceUrl or localFilePath');
   }
 }

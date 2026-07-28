@@ -79,7 +79,6 @@ export const claimQueueEvents = new QueueEvents(CLAIM_QUEUE_NAME, {
   prefix: PREFIX,
   skipVersionCheck: true,
 });
-
 export const ALL_QUEUES = [rcQueue, dlQueue, workshopQueue, insuranceQueue, claimQueue] as const;
 
 interface RouterResult {

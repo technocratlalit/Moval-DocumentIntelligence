@@ -194,42 +194,38 @@ const RC_QUALITY = [
   'invalidPageIndices', 'confidenceScore', 'requiresHumanReview', 'lowConfidenceFields',
 ]
 
-// ── Claim form fields ─────────────────────────────────────────────────────────
+// ── Claim form fields (nested canonical schema) ─────────────────────────────
 const CLAIM_OVERVIEW = [
-  'insurerCode', 'insurerName', 'policyNo', 'claimNo', 'registrationNo',
-  'insuredName', 'dateOfLoss', 'placeOfAccident', 'natureOfLoss',
+  'meta.source_insurer', 'policy_details.policy_no', 'policy_details.claim_no',
+  'insured_details.name', 'vehicle_details.registration_no', 'loss_details.date_of_loss',
+  'loss_details.type_of_loss', 'driver_details.name',
 ]
-const CLAIM_INSURED = [
-  'insuredName', 'insuredNameNative', 'insuredAddress', 'insuredAddressNative',
-  'pinCode', 'mobileNo', 'email', 'panNo',
-  'bankAccountHolder', 'bankAccountNo', 'bankIfscCode',
-]
-const CLAIM_VEHICLE = [
-  'registrationNo', 'vehicleMake', 'vehicleYear', 'engineNo', 'chassisNo',
-  'vehicleClass', 'cubicCapacity',
-]
-const CLAIM_LOSS = [
-  'dateOfLoss', 'timeOfLoss', 'placeOfAccident', 'natureOfLoss',
-  'accidentDescription', 'accidentDescriptionEnglish', 'vehicleSpeedAtAccident',
-  'estimatedRepairCost', 'idv', 'inspectionLocation', 'damageDescription',
-  'dateOfIntimation', 'insurancePeriodStart', 'insurancePeriodEnd', 'coverNoteNo',
-]
-const CLAIM_DRIVER = [
-  'driverName', 'driverAgeOrDob', 'driverAddress', 'driverRelationship',
-  'drivingLicenseNo', 'licenseIssuingAuthority', 'licenseExpiryDate',
-  'licenseClass', 'alcoholInfluence',
-]
-const CLAIM_POLICE = [
-  'policeReportLodged', 'firNo', 'policeStationName', 'firDate',
-  'thirdPartyInjury', 'thirdPartyDeath', 'thirdPartyPropertyDamage',
-  'thirdPartyDetails', 'witnessDetails',
-]
-const CLAIM_QUALITY = [
-  'isCorrectDocumentType', 'detectedDocumentType', 'hasAllPagesCorrectType',
-  'invalidPageIndices', 'confidenceScore', 'requiresHumanReview', 'lowConfidenceFields',
-  'templateVersion', 'declarationDate', 'declarationPlace', 'signaturePresent',
-  'commercialPermitNo', 'commercialFitnessCert', 'commercialLadenWeight',
-  'commercialSectionNotApplicable',
+const CLAIM_INSURED = ['name', 'address', 'mobile', 'email', 'pan_no']
+const CLAIM_VEHICLE = ['registration_no', 'registration_no_normalized', 'engine_no', 'chassis_no', 'make', 'model', 'year']
+const CLAIM_LOSS = ['date_of_loss', 'date_of_loss_iso', 'time_of_loss', 'place_of_loss_accident', 'type_of_loss', 'estimated_cost_of_repairs']
+const CLAIM_DRIVER = ['name', 'relationship_to_insured', 'driving_license_no', 'license_valid_upto_expiry_date']
+const CLAIM_QUALITY = ['confidenceScore', 'requiresHumanReview', 'status']
+
+const CLAIM_DISPLAY_FIELDS = [
+  { key: 'insurer_code', label: 'Insurer' },
+  { key: 'policy_no', label: 'Policy No' },
+  { key: 'claim_no', label: 'Claim No' },
+  { key: 'period_of_insurance', label: 'Period of insurance' },
+  { key: 'insured_name', label: 'Insured name' },
+  { key: 'insured_address', label: 'Insured address' },
+  { key: 'insured_mobile', label: 'Mobile' },
+  { key: 'vehicle_regd_no', label: 'Vehicle registration' },
+  { key: 'engine_no', label: 'Engine No' },
+  { key: 'chassis_no', label: 'Chassis No' },
+  { key: 'date_of_accident', label: 'Date of accident' },
+  { key: 'time_of_accident', label: 'Time of accident' },
+  { key: 'place_of_accident', label: 'Place of accident' },
+  { key: 'speed_at_accident', label: 'Speed at accident' },
+  { key: 'brief_description_of_accident', label: 'Accident description' },
+  { key: 'estimated_cost_of_repairs', label: 'Estimated repair cost' },
+  { key: 'driver_name', label: 'Driver name' },
+  { key: 'driving_licence_no', label: 'Driving licence No' },
+  { key: 'signature_present', label: 'Signature present' },
 ]
 
 // ── Policy fields (strict spec — human-readable labels) ───────────────────────
@@ -305,6 +301,30 @@ const LABOUR_COLUMNS = [
   'rowIndex', 'srNo', 'labourCode', 'hsnSac', 'description', 'quantityOrHours', 'rate',
   'grossAmount', 'discount', 'taxableAmount', 'taxAmount', 'totalAmount', 'rowType',
 ]
+
+function claimDebugTab(result) {
+  const meta = result?.extractionMeta
+  if (!meta?.debugStages && !meta?.cleanedMarkdown && !meta?.rawPairs) return null
+
+  const rows = []
+  if (meta.cleanedMarkdown) {
+    const md = meta.cleanedMarkdown
+    rows.push({ key: 'Gemini input (markdown)', value: md.slice(0, 4000) + (md.length > 4000 ? '…' : '') })
+  }
+  if (meta.rawPairs?.length) rows.push({ key: 'Raw pairs count', value: String(meta.rawPairs.length) })
+  if (meta.postprocessDiff?.length) rows.push({ key: 'Postprocess changes', value: String(meta.postprocessDiff.length) })
+  if (meta.debugStages?.length) rows.push({ key: 'Debug stages', value: meta.debugStages.map((s) => s.stage).join(', ') })
+  if (meta.flaggedFields?.length) rows.push({ key: 'Flagged fields', value: meta.flaggedFields.map((f) => f.path).join(', ') })
+
+  return {
+    id: 'pipeline',
+    label: 'Pipeline debug',
+    kind: 'claim_debug',
+    overviewRows: rows,
+    pairRows: (meta.rawPairs ?? []).map((p) => ({ label: p.label, value: p.value ?? '—', section: p.section })),
+    postprocessDiff: meta.postprocessDiff ?? [],
+  }
+}
 
 function fieldTab(id, label, rows) {
   return { id, label, kind: 'fields', rows }
@@ -453,6 +473,38 @@ export function buildInspectViews(documentType, result) {
       return { tabs, defaultTab: 'overview' }
     }
 
+    case 'CLAIM': {
+      const display = result.display ?? {}
+      const overviewRows = result.display
+        ? CLAIM_DISPLAY_FIELDS.map(({ key, label }) => ({
+            key: label,
+            value: formatFieldValue(display[key]),
+          }))
+        : CLAIM_OVERVIEW.map((path) => ({
+            key: path,
+            value: formatFieldValue(getAt(result, path)),
+          }))
+      const debugTab = claimDebugTab(result)
+      const tabs = [
+        fieldTab('overview', 'Overview', overviewRows),
+        ...(result.display
+          ? [fieldTab('claim_data', 'Claim data', CLAIM_DISPLAY_FIELDS.map(({ key, label }) => ({
+              key: label,
+              value: formatFieldValue(display[key]),
+            })))]
+          : []),
+        fieldTab('insured', 'Insured', pickFieldRows(result, CLAIM_INSURED, { prefix: 'insured_details' })),
+        fieldTab('vehicle', 'Vehicle', pickFieldRows(result, CLAIM_VEHICLE, { prefix: 'vehicle_details' })),
+        fieldTab('loss', 'Loss', pickFieldRows(result, CLAIM_LOSS, { prefix: 'loss_details' })),
+        fieldTab('driver', 'Driver', pickFieldRows(result, CLAIM_DRIVER, { prefix: 'driver_details' })),
+        fieldTab('quality', 'Quality', pickFieldRows(result, CLAIM_QUALITY)),
+        ...(debugTab ? [debugTab] : []),
+        allTab,
+        jsonTab,
+      ].filter(Boolean)
+      return { tabs, defaultTab: 'overview' }
+    }
+
     case 'WORKSHOP': {
       const isSequential = result.tableLayout === 'sequential' && (result.lineItemsTable?.length ?? 0) > 0
       const tabs = [
@@ -467,41 +519,6 @@ export function buildInspectViews(documentType, result) {
         jsonTab,
       ].filter(Boolean)
       return { tabs, defaultTab: isSequential ? 'lineItems' : 'parts' }
-    }
-
-    case 'CLAIM': {
-      const metaRows = result.extractionMeta
-        ? [
-            { key: 'OCR pairs', value: formatFieldValue(result.extractionMeta.ocrPairCount) },
-            { key: 'OCR engine', value: formatFieldValue(result.extractionMeta.ocrEngine) },
-            { key: 'OCR model', value: formatFieldValue(result.extractionMeta.ocrModel) },
-            { key: 'Page count', value: formatFieldValue(result.extractionMeta.pageCount) },
-            { key: 'OCR confidence', value: formatFieldValue(result.extractionMeta.averageOcrConfidence) },
-            { key: 'Low-confidence words', value: formatFieldValue(result.extractionMeta.lowConfidenceWordCount) },
-            { key: 'Template', value: formatFieldValue(result.extractionMeta.templateVersion) },
-            { key: 'OCR route', value: formatFieldValue(result.extractionMeta.ocrRoute) },
-            { key: 'Alias mapped', value: formatFieldValue(result.extractionMeta.aliasMappedCount) },
-            { key: 'Unmapped pairs', value: formatFieldValue(result.extractionMeta.unmappedPairCount) },
-            { key: 'Raw pairs stored', value: formatFieldValue(result.extractionMeta.rawPairs?.length) },
-            { key: 'Gemini fallback', value: formatFieldValue(result.extractionMeta.geminiFallbackUsed) },
-          ]
-        : [];
-      const tabs = [
-        fieldTab('overview', 'Overview', pickFieldRows(result, CLAIM_OVERVIEW)),
-        fieldTab('insured', 'Insured', pickFieldRows(result, CLAIM_INSURED)),
-        fieldTab('vehicle', 'Vehicle', pickFieldRows(result, CLAIM_VEHICLE)),
-        fieldTab('loss', 'Loss', pickFieldRows(result, CLAIM_LOSS)),
-        fieldTab('driver', 'Driver', pickFieldRows(result, CLAIM_DRIVER)),
-        fieldTab('police', 'Police', pickFieldRows(result, CLAIM_POLICE)),
-        fieldTab('quality', 'Quality', [
-          ...pickFieldRows(result, CLAIM_QUALITY),
-          ...metaRows,
-        ]),
-        extraFieldsTab(result),
-        allTab,
-        jsonTab,
-      ].filter(Boolean)
-      return { tabs, defaultTab: 'overview' }
     }
 
     default:

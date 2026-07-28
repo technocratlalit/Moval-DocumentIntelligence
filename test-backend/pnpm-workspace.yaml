@@ -1,2 +1,7 @@
 packages:
   - "."
+allowBuilds:
+  '@datadog/pprof': false
+  '@newrelic/fn-inspect': false
+  '@newrelic/native-metrics': false
+  protobufjs: false

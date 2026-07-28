@@ -59,6 +59,13 @@ export interface JobContext {
   };
 }
 
+export interface MistralOcrCallRecord {
+  pages: number;
+  costUsd: number;
+  latencyMs: number;
+  status: 'success' | 'failure';
+}
+
 export interface CostBreakdown {
   costUsd: number;
   costINR: number;
@@ -79,10 +86,3 @@ export interface ModelPricing {
 }
 
 export type JobPriorityLevel = 'urgent' | 'normal' | 'low';
-
-export interface MistralOcrCallRecord {
-  pages: number;
-  costUsd: number;
-  latencyMs: number;
-  status: 'success' | 'failure';
-}

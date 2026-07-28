@@ -11,4 +11,7 @@ router
   .get(extractionController.getExtraction)
   .delete(extractionController.deleteExtraction);
 
+router.get('/:id/review', extractionController.getReview);
+router.post('/:id/review', extractionController.submitReview);
+
 export default router;

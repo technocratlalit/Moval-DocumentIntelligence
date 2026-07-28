@@ -117,6 +117,30 @@ export function ExtractionInspectDialog({ job, onClose, onCopyJson }) {
               >
                 {tab.kind === 'fields' && <FieldTable rows={tab.rows} />}
                 {tab.kind === 'table' && <ArrayTable columns={tab.columns} rows={tab.rows} />}
+                {tab.kind === 'claim_debug' && (
+                  <div className="space-y-4 p-3">
+                    <FieldTable rows={tab.overviewRows} />
+                    {tab.pairRows?.length > 0 && (
+                      <>
+                        <p className="text-sm font-medium">Raw OCR pairs</p>
+                        <ArrayTable columns={['section', 'label', 'value']} rows={tab.pairRows} />
+                      </>
+                    )}
+                    {tab.postprocessDiff?.length > 0 && (
+                      <>
+                        <p className="text-sm font-medium">Postprocess changes</p>
+                        <ArrayTable
+                          columns={['path', 'before', 'after']}
+                          rows={tab.postprocessDiff.map((d) => ({
+                            path: d.path,
+                            before: String(d.before ?? '—'),
+                            after: String(d.after ?? '—'),
+                          }))}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
                 {tab.kind === 'json' && (
                   <pre className="whitespace-pre-wrap break-all bg-muted/40 p-3 font-mono text-xs">
                     {formatJson(job?.result ?? job)}

@@ -1,17 +1,6 @@
 export type MistralBlockType =
-  | 'text'
-  | 'title'
-  | 'list'
-  | 'table'
-  | 'signature'
-  | 'header'
-  | 'footer'
-  | 'image'
-  | 'caption'
-  | 'equation'
-  | 'code'
-  | 'references'
-  | 'aside_text';
+  | 'text' | 'title' | 'list' | 'table' | 'signature' | 'header' | 'footer'
+  | 'image' | 'caption' | 'equation' | 'code' | 'references' | 'aside_text';
 
 export interface MistralOcrBlock {
   type: MistralBlockType | string;
@@ -29,10 +18,17 @@ export interface MistralOcrTable {
   format?: 'html' | 'markdown';
 }
 
+export interface MistralWordConfidence {
+  text?: string;
+  word?: string;
+  confidence: number;
+  start_index?: number;
+}
+
 export interface MistralConfidenceScores {
   average_page_confidence_score?: number;
   minimum_page_confidence_score?: number;
-  word_confidence_scores?: Array<{ word: string; confidence: number }>;
+  word_confidence_scores?: MistralWordConfidence[];
 }
 
 export interface MistralOcrPage {

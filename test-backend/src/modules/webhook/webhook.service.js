@@ -2,6 +2,7 @@ import { createHmac } from 'crypto';
 import { ExtractionJob } from '../../model/extraction-job.schema.js';
 import { _config } from '../../config/config.js';
 import { ApiError } from '../../shared/apiError.js';
+import { applyClaimFields } from '../extraction/apply-claim-fields.js';
 
 export class WebhookService {
   verifySignature(rawBody, receivedSig) {
@@ -21,39 +22,35 @@ export class WebhookService {
       throw ApiError.badRequest('Missing correlationId in webhook payload.');
     }
 
-    const update = {
-      jobId: payload.jobId ?? undefined,
-      durationMs: payload.durationMs ?? undefined,
-    };
-
-    if (payload.status === 'success') {
-      update.status = 'completed';
-      update.result = payload.result ?? null;
-      update.error = null;
-      update.completedAt = new Date();
-      if (payload.totalTokens != null) update.totalTokens = payload.totalTokens;
-      if (payload.totalCostINR != null) update.totalCostINR = payload.totalCostINR;
-    } else {
-      update.status = 'failed';
-      update.error = payload.error ?? 'Extraction failed';
-      update.result = null;
-      update.completedAt = new Date();
-      if (payload.totalTokens != null) update.totalTokens = payload.totalTokens;
-      if (payload.totalCostINR != null) update.totalCostINR = payload.totalCostINR;
-    }
-
-    const job = await ExtractionJob.findOneAndUpdate(
-      { correlationId },
-      { $set: update },
-      { new: true },
-    );
-
+    const job = await ExtractionJob.findOne({ correlationId });
     if (!job) {
       console.warn(`[webhook] Unknown correlationId: ${correlationId}`);
       return null;
     }
 
-    console.log(`[webhook] Updated job ${job._id} → ${update.status} (${correlationId})`);
+    job.jobId = payload.jobId ?? job.jobId;
+    job.durationMs = payload.durationMs ?? job.durationMs;
+
+    if (payload.status === 'success') {
+      job.status = 'completed';
+      job.result = payload.result ?? null;
+      job.error = null;
+      job.completedAt = new Date();
+      if (payload.totalTokens != null) job.totalTokens = payload.totalTokens;
+      if (payload.totalCostINR != null) job.totalCostINR = payload.totalCostINR;
+      applyClaimFields(job, job.result);
+    } else {
+      job.status = 'failed';
+      job.error = payload.error ?? 'Extraction failed';
+      job.result = null;
+      job.completedAt = new Date();
+      if (payload.totalTokens != null) job.totalTokens = payload.totalTokens;
+      if (payload.totalCostINR != null) job.totalCostINR = payload.totalCostINR;
+    }
+
+    await job.save();
+
+    console.log(`[webhook] Updated job ${job._id} → ${job.status} (${correlationId})`);
     return job;
   }
 }

@@ -240,7 +240,6 @@ export const insuranceWorker = new Worker(INSURANCE_QUEUE_NAME, processDocumentJ
 });
 insuranceWorker.on('failed', makeFailureHandler(INSURANCE_QUEUE_NAME));
 
-// Claim Worker - HEAVY lane with Mistral OCR rate cap: 2 concurrent, 8 jobs/min
 export const claimWorker = new Worker(CLAIM_QUEUE_NAME, processDocumentJob, {
   connection: bullmqConnection.duplicate() as any,
   concurrency: 2,
@@ -249,5 +248,4 @@ export const claimWorker = new Worker(CLAIM_QUEUE_NAME, processDocumentJob, {
 });
 claimWorker.on('failed', makeFailureHandler(CLAIM_QUEUE_NAME));
 
-// log the workers initialization
 obs.info('All five document workers initialized: rc-queue, dl-queue, workshop-queue, insurance-queue, claim-queue');

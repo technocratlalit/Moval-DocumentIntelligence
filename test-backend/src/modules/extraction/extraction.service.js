@@ -6,6 +6,7 @@ import { ExtractionJob } from '../../model/extraction-job.schema.js';
 import { Upload } from '../../model/upload.schema.js';
 import { _config } from '../../config/config.js';
 import { ApiError } from '../../shared/apiError.js';
+import { applyClaimFields } from './apply-claim-fields.js';
 
 const VALID_TYPES = ['RC', 'DL', 'WORKSHOP', 'POLICY', 'CLAIM'];
 
@@ -123,6 +124,7 @@ export class ExtractionService {
         job.status = 'completed';
         job.jobId = body.jobId ?? job.jobId;
         job.result = body.data ?? body.result ?? null;
+        applyClaimFields(job, job.result);
         job.cached = Boolean(body.cached);
         job.totalTokens = body.totalTokens ?? (body.cached ? 0 : undefined);
         job.totalCostINR = body.totalCostINR ?? (body.cached ? 0 : undefined);
@@ -188,5 +190,59 @@ export class ExtractionService {
     if (!mongoose.Types.ObjectId.isValid(id)) return false;
     const job = await ExtractionJob.findByIdAndDelete(id);
     return Boolean(job);
+  }
+
+  async getReview(id) {
+    const job = await this.getExtraction(id);
+    if (job.documentType !== 'CLAIM') {
+      throw ApiError.badRequest('Review is only available for CLAIM extractions.');
+    }
+    const upload = job.uploadIds?.[0];
+    return {
+      id: job._id,
+      status: job.status,
+      canonicalJson: job.result,
+      display: job.result?.display ?? null,
+      flaggedFields: job.flaggedFields ?? job.result?.extractionMeta?.flaggedFields ?? [],
+      fieldConfidence: job.fieldConfidence ?? [],
+      fileUrl: upload?.url ?? job.urls?.[0] ?? null,
+      reviewCorrections: job.reviewCorrections ?? [],
+    };
+  }
+
+  async submitReview(id, corrections = []) {
+    const job = await ExtractionJob.findById(id);
+    if (!job) throw ApiError.notFound('Extraction job not found.');
+    if (job.documentType !== 'CLAIM') {
+      throw ApiError.badRequest('Review is only available for CLAIM extractions.');
+    }
+
+    const result = { ...(job.result ?? {}) };
+    const applied = [];
+
+    for (const c of corrections) {
+      if (!c?.path) continue;
+      const parts = c.path.split('.');
+      let cur = result;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (cur[parts[i]] == null) cur[parts[i]] = {};
+        cur = cur[parts[i]];
+      }
+      const key = parts[parts.length - 1];
+      applied.push({
+        path: c.path,
+        oldValue: cur[key],
+        newValue: c.newValue,
+        correctedAt: new Date(),
+      });
+      cur[key] = c.newValue;
+    }
+
+    job.reviewCorrections = [...(job.reviewCorrections ?? []), ...applied];
+    job.result = result;
+    job.status = 'completed';
+    job.flaggedFields = [];
+    await job.save();
+    return job;
   }
 }

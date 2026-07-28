@@ -38,4 +38,14 @@ export class ExtractionController {
     if (!success) throw ApiError.notFound('Extraction job not found.');
     res.status(200).json(new ApiResponse(200, null, 'Extraction deleted successfully.'));
   });
+
+  getReview = asyncHandler(async (req, res) => {
+    const data = await extractionService.getReview(req.params.id);
+    res.status(200).json(new ApiResponse(200, data, 'Review data fetched.'));
+  });
+
+  submitReview = asyncHandler(async (req, res) => {
+    const job = await extractionService.submitReview(req.params.id, req.body?.corrections ?? []);
+    res.status(200).json(new ApiResponse(200, job, 'Review corrections applied.'));
+  });
 }
