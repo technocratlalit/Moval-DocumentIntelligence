@@ -22,12 +22,16 @@ const documentGateProps: Record<string, Schema> = {
   },
   hasAllPagesCorrectType: {
     type: Type.BOOLEAN,
-    description: 'True only if every page belongs to the same workshop job.',
+    description:
+      'True when every page belongs to the same workshop job package — billing pages plus ancillary ' +
+      'pages (Gate Pass, release slip) from the same RO/reg/workshop visit are valid.',
   },
   invalidPageIndices: {
     type: Type.ARRAY,
     nullable: true,
-    description: '1-indexed page numbers that are not workshop bill pages.',
+    description:
+      '1-indexed pages that are truly unrelated (RC, DL, policy, different vehicle/job). ' +
+      'Do NOT list Gate Pass or release slip from the same visit.',
     items: { type: Type.NUMBER },
   },
   confidenceScore: {

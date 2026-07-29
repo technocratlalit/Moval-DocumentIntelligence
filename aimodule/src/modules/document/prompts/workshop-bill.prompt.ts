@@ -45,6 +45,9 @@ const COMPLETENESS_MANDATE = `
      separate "HSN/SAC Code | Taxable Amount | CGST | SGST | IGST | Total" aggregation table AFTER
      the Grand Total. These rows have no Part No and no Description. Do NOT extract them as parts/labour.
      Bill-end for extraction purposes = the Grand Total / "Total Parts Cost + Labour Cost" summary block.
+  9. ANCILLARY TAIL PAGES — multi-page dealer PDFs often end with a Gate Pass, G P No slip, or vehicle
+     release/delivery note from the SAME visit (same workshop, RO no, invoice no, reg no). These pages have
+     NO parts/labour tables — scan billing pages for rows; do NOT extract table rows from Gate Pass pages.
   ═══════════════════════════════════════════════════════
 `;
 
@@ -115,10 +118,25 @@ const GATE_BLOCK = `
   • detectedDocumentType: WORKSHOP_BILL | SALE_INVOICE | INSURANCE_POLICY | RC | DL | UNKNOWN
   If false, STOP — leave other fields null/empty.
 
-  STEP 1 — PER-PAGE VALIDATION:
-  • hasAllPagesCorrectType — false if any page is RC/DL/policy/sale invoice.
-  • invalidPageIndices — 1-indexed wrong pages.
-  If false, STOP.
+  STEP 1 — PER-PAGE VALIDATION (WORKSHOP JOB PACKAGE):
+  A workshop job package = billing pages (invoice/estimate/job card/proforma) PLUS ancillary pages from
+  the SAME visit when they share workshop name and/or RO no / invoice no / reg no.
+
+  VALID ANCILLARY PAGES (no line items to extract — still part of the same package):
+  • Gate Pass, G P No slip, vehicle release/delivery slip
+  • Service advisor copy, payment acknowledgment from same workshop visit
+
+  • hasAllPagesCorrectType = true when ALL pages belong to the same workshop job package — even if some
+    pages (e.g. Gate Pass) have zero table rows.
+  • invalidPageIndices — ONLY truly unrelated pages: RC, DL, policy, unrelated sale invoice, or a
+    different vehicle/job. NEVER list Gate Pass / release slip from the same visit.
+  • Do NOT extract table rows from Gate Pass or release-slip pages — extract invoice data from billing pages only.
+
+  EXAMPLE (KIA/OEM dealer — invoice + gate pass):
+  Page 1 = Invoice with parts/labour tables. Page 2 = Gate Pass (same RO, reg, workshop).
+  → hasAllPagesCorrectType: true, invalidPageIndices: []
+
+  If hasAllPagesCorrectType is false, STOP.
 `;
 
 
