@@ -11,6 +11,27 @@ export function normaliseHypothecation(val: string | null | undefined): string |
   return val.trim();
 }
 
+function addOnNameMatches(name: string | null | undefined, pattern: RegExp): boolean {
+  if (!name) return false;
+  return pattern.test(name.trim());
+}
+
+function deriveCoverOptedFromAddOns(
+  covers: unknown,
+  pattern: RegExp,
+): boolean | undefined {
+  if (!Array.isArray(covers)) return undefined;
+  const matched = covers.some((c) => {
+    if (!c || typeof c !== 'object') return false;
+    const row = c as { name?: string | null; opted?: boolean | null };
+    if (row.opted === false) return false;
+    return addOnNameMatches(row.name, pattern);
+  });
+  return matched ? true : false;
+}
+
+const ENGINE_PROTECT_RE = /engine\s*(and\s*gearbox\s*)?protect/i;
+const CONSUMABLES_RE = /consumable/i;
 
 export function inferChannelType(
   agentCode: string | null | undefined,
@@ -56,6 +77,19 @@ export function normalizeStrictPolicyFields(raw: Record<string, unknown>): Recor
     out.totalIdv = out.vehicleIdv;
   }
 
+  if (typeof out.financierName === 'string' || out.financierName == null) {
+    out.financierName = normaliseHypothecation(out.financierName as string | null | undefined);
+  }
+
+  if (out.engineProtectOpted == null) {
+    const derived = deriveCoverOptedFromAddOns(out.addOnCovers, ENGINE_PROTECT_RE);
+    if (derived !== undefined) out.engineProtectOpted = derived;
+  }
+  if (out.consumablesCoverOpted == null) {
+    const derived = deriveCoverOptedFromAddOns(out.addOnCovers, CONSUMABLES_RE);
+    if (derived !== undefined) out.consumablesCoverOpted = derived;
+  }
+
   return out;
 }
 
@@ -81,4 +115,17 @@ export function verifyPremiumMath(data: {
 
   // Allow ±₹5 rounding tolerance
   return Math.abs(expected - actual) <= 5;
+}
+
+// ponytail: offline self-check — run via import in dev; no test framework
+if (process.env.POLICY_UTILS_SELF_CHECK === '1') {
+  const assert = (cond: boolean, msg: string) => { if (!cond) throw new Error(msg); };
+  assert(normaliseHypothecation('Not Financed') === null, 'financier NA');
+  assert(normaliseHypothecation('CANARA BANK') === 'CANARA BANK', 'financier bank');
+  const norm = normalizeStrictPolicyFields({
+    financierName: 'N/A',
+    addOnCovers: [{ name: 'Engine Protect Cover', opted: true }],
+  });
+  assert(norm.financierName === null, 'financier normalized');
+  assert(norm.engineProtectOpted === true, 'engine from addOnCovers');
 }

@@ -11,6 +11,16 @@ const numericPreprocess = z.preprocess((val: unknown) => {
   return null;
 }, z.number().nullable());
 
+const booleanPreprocess = z.preprocess((val: unknown) => {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') {
+    const normalized = val.trim().toLowerCase();
+    if (['true', 'yes', 'y', '1'].includes(normalized)) return true;
+    if (['false', 'no', 'n', '0'].includes(normalized)) return false;
+  }
+  return null;
+}, z.boolean().nullable());
+
 const AddOnCoverSchema = z.object({
   name: z.string().nullable().optional(),
   opted: z.boolean().nullable().optional(),
@@ -36,6 +46,14 @@ export const InsurancePolicySchema = z.object({
   grossPremiumPaid: numericPreprocess,
   engineNo: z.string().nullable().optional(),
   chassisNo: z.string().nullable().optional(),
+  vehicleMake: z.string().nullable().optional(),
+  vehicleModel: z.string().nullable().optional(),
+  financierName: z.string().nullable().optional(),
+  geographicalArea: z.string().nullable().optional(),
+  tpLiabilityLimit: numericPreprocess,
+  paCoverAmount: numericPreprocess,
+  engineProtectOpted: booleanPreprocess.optional(),
+  consumablesCoverOpted: booleanPreprocess.optional(),
   addOnCovers: z.array(AddOnCoverSchema).nullable().optional(),
   nomineeName: z.string().nullable().optional(),
   registrationAuthority: z.string().nullable().optional(),

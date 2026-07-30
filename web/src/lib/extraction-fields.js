@@ -44,12 +44,16 @@ function formatInr(value) {
 /** Policy-specific display formatting (currency, NCB %, booleans). */
 export function formatPolicyFieldValue(key, value) {
   if (value == null || value === '') return '—'
-  if (key === 'grossPremiumPaid' || key === 'totalIdv') return formatInr(value)
+  if (key === 'grossPremiumPaid' || key === 'totalIdv' || key === 'tpLiabilityLimit' || key === 'paCoverAmount') {
+    return formatInr(value)
+  }
   if (key === 'ncbPercentage') {
     const n = Number(value)
     return Number.isNaN(n) ? formatFieldValue(value) : `${n}%`
   }
-  if (key === 'opted' || typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (key === 'engineProtectOpted' || key === 'consumablesCoverOpted' || key === 'opted' || typeof value === 'boolean') {
+    return value ? 'Yes' : 'No'
+  }
   return formatFieldValue(value)
 }
 
@@ -266,9 +270,19 @@ const POLICY_PERIOD = [
 ]
 const POLICY_VEHICLE = [
   { key: 'registrationNo', label: 'Vehicle No.' },
+  { key: 'vehicleMake', label: 'Make' },
+  { key: 'vehicleModel', label: 'Model' },
   { key: 'engineNo', label: 'Engine No.' },
   { key: 'chassisNo', label: 'Chassis No.' },
+  { key: 'geographicalArea', label: 'Geographical Area' },
+  { key: 'financierName', label: 'Financier' },
   { key: 'registrationAuthority', label: 'Zone / RTO Code' },
+]
+const POLICY_LIMITS = [
+  { key: 'tpLiabilityLimit', label: 'TP Liability Limit' },
+  { key: 'paCoverAmount', label: 'PA Cover Amount' },
+  { key: 'engineProtectOpted', label: 'Engine Protect' },
+  { key: 'consumablesCoverOpted', label: 'Consumables Cover' },
 ]
 const POLICY_IDV = [{ key: 'totalIdv', label: 'Sum Insured (IDV)' }]
 const POLICY_NCB = [
@@ -440,6 +454,7 @@ export function buildInspectViews(documentType, result) {
         policyFieldTab('insured', 'Insured', r, POLICY_INSURED),
         policyFieldTab('period', 'Period', r, POLICY_PERIOD),
         policyFieldTab('vehicle', 'Vehicle', r, POLICY_VEHICLE),
+        policyFieldTab('limits', 'Limits & Covers', r, POLICY_LIMITS),
         policyFieldTab('idv', 'IDV', r, POLICY_IDV),
         policyFieldTab('ncb', 'NCB & Premium', r, POLICY_NCB),
         coversTab,

@@ -58,10 +58,11 @@ export function rowSummary(job) {
     case 'POLICY': {
       const p = normalizePolicyResult(r)
       const reg = p.registrationNo
+      const vehicle = [p.vehicleMake, p.vehicleModel].filter(Boolean).join(' ')
       const premium = p.grossPremiumPaid != null
         ? formatPolicyFieldValue('grossPremiumPaid', p.grossPremiumPaid)
         : null
-      const detail = [reg, premium].filter(Boolean).join(' · ')
+      const detail = [reg, vehicle || null, premium].filter(Boolean).join(' · ')
       return {
         fileName,
         primary: p.policyNumber ?? '—',

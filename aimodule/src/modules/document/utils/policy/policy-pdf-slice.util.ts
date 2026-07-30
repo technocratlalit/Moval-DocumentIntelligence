@@ -19,10 +19,10 @@ export function defaultPolicyPageSplit(pageCount: number): PolicyPageMap {
     return { dataPageIndices: [1], premiumPageIndices: [2], skipPageIndices: [3] };
   }
   if (pageCount === 4) {
-    return { dataPageIndices: [1, 2], premiumPageIndices: [2], skipPageIndices: [4] };
+    return { dataPageIndices: [1, 2], premiumPageIndices: [2, 3, 4], skipPageIndices: [] };
   }
   if (pageCount === 5) {
-    return { dataPageIndices: [1, 2, 3], premiumPageIndices: [2, 3], skipPageIndices: [5] };
+    return { dataPageIndices: [1, 2, 3], premiumPageIndices: [2, 3, 4], skipPageIndices: [5] };
   }
 
   const skip = Array.from({ length: pageCount - 4 }, (_, i) => i + 5);
