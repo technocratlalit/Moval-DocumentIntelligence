@@ -5,6 +5,7 @@ import { asyncHandler } from '../../shared/middleware/asyncHandler.middleware.js
 import { getCorrelationId } from '../../shared/context/correlation.context.js';
 import { _config } from '../../config/config.js';
 import type { JobPriorityLevel } from '../../cost/types.js';
+import { parseTenantHeader, resolveWebhookUrl } from '../../infrastructure/webhook/webhook-url.util.js';
 
 const KNOWN_UNRECOVERABLE_CODES = [
   'UNREADABLE_DOCUMENT',
@@ -85,6 +86,20 @@ export class DocumentController {
       return;
     }
 
+    const tenantHeader = req.headers['x-aimodule-tenant'];
+    const tenant = parseTenantHeader(tenantHeader);
+    if (tenantHeader && !tenant) {
+      res.status(400).json({ success: false, message: 'X-Aimodule-Tenant must be "in" or "com".' });
+      return;
+    }
+    if (tenant && !resolveWebhookUrl(tenant)) {
+      res.status(503).json({
+        success: false,
+        message: `Webhook URL not configured for tenant "${tenant}".`,
+      });
+      return;
+    }
+
    
     const typeUpper = (type as string).toUpperCase();
     const smartDefault =
@@ -103,6 +118,7 @@ export class DocumentController {
         documentName,
         documentId,
         tableLayout: workshopTableLayout,
+        tenant,
       });
 
       if (enqueueResult.fromCache && enqueueResult.cachedResult != null) {

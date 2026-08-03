@@ -10,7 +10,7 @@ const gzipAsync = promisify(gzip);
  * WebhookService
  *
  * Pushes extraction results to the downstream receiver (Laravel backend) via
- * an HMAC-signed HTTP POST. The receiver URL is WEBHOOK_URL in .env.
+ * an HMAC-signed HTTP POST. URL from per-job tenant (WEBHOOK_URL_IN/COM) or WEBHOOK_URL fallback.
  *
  * Security: every payload is signed with HMAC-SHA256(WEBHOOK_SECRET, body).
  * The receiver must verify the X-Webhook-Signature header before processing.
@@ -55,13 +55,9 @@ async function gzipBody(data: string): Promise<Buffer> {
 export class WebhookService {
   private readonly obs = ObserverService.getInstance();
 
-  /**
-   * Fire-and-forget push to WEBHOOK_URL.
-   * Call this after every BullMQ job completes (success or failure).
-   * Never throws — errors are logged and swallowed.
-   */
-  public async send(payload: WebhookPayload): Promise<void> {
-    const url = _config.WEBHOOK_URL;
+ 
+  public async send(payload: WebhookPayload, urlOverride?: string | null): Promise<void> {
+    const url = urlOverride ?? _config.WEBHOOK_URL;
     if (!url) return; // webhook not configured — skip silently
 
     const rawBody = JSON.stringify(payload);

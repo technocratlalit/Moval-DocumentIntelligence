@@ -8,6 +8,7 @@ import { deriveContentJobId, type ContentJobOptions } from '../../../cost/job-id
 import { ExtractionResultCache } from '../../../cost/result-cache.service.js';
 import type { JobPriorityLevel } from '../../../cost/types.js';
 import { AdminService } from '../../../modules/admin/admin.service.js';
+import type { WebhookTenant } from '../../webhook/webhook-url.util.js';
 
 export { deriveContentJobId };
 
@@ -15,6 +16,7 @@ export interface EnqueueOptions extends ContentJobOptions {
   priorityLevel?: JobPriorityLevel;
   documentName?: string;   // human-readable file/doc name, e.g. 'vehicle_rc_front.jpg'
   documentId?: string;     // DB record ID from caller (e.g. Laravel document ID)
+  tenant?: WebhookTenant;  // Laravel .in / .com — routes webhook after extraction
 }
 
 export interface EnqueueResult {
@@ -101,6 +103,7 @@ export class DocsQueueService {
         documentName: options.documentName ?? 'unknown',
         documentId: options.documentId ?? 'unknown',
         tableLayout: resolvedTableLayout,
+        tenant: options.tenant,
       },
       { priority, jobId: contentJobId },
     );

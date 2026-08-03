@@ -9,6 +9,7 @@ import { DLQService } from '../dlq/dlq.service.js';
 import { AIService } from '../../ai/ai.service.js';
 import { ObserverService } from '../../observabllity/observer.service.js';
 import { WebhookService } from '../../webhook/webhook.service.js';
+import { resolveWebhookUrl } from '../../webhook/webhook-url.util.js';
 import { runWithJobContext, getJobCostSummary } from '../../../shared/context/correlation.context.js';
 import { logJobCostSummary } from '../../../cost/logger.js';
 import { ExtractionResultCache } from '../../../cost/result-cache.service.js';
@@ -74,11 +75,12 @@ const sharedWorkerOptions = {
 // Job Processor
 
 const processDocumentJob = async (job: Job): Promise<any> => {
-  const { type, urls, correlationId, documentName, documentId, tableLayout } = job.data;
+  const { type, urls, correlationId, documentName, documentId, tableLayout, tenant } = job.data;
   const effectiveCorrelationId = correlationId ?? job.id ?? 'no-context';
   const effectiveDocumentName = documentName ?? 'unknown';
   const effectiveDocumentId = documentId ?? 'unknown';
   const startTime = Date.now();
+  const webhookUrl = resolveWebhookUrl(tenant);
 
   const runJob = async () => runWithJobContext(
     effectiveCorrelationId, type, job.id ?? 'unknown',
@@ -133,7 +135,7 @@ const processDocumentJob = async (job: Job): Promise<any> => {
         timestamp: new Date().toISOString(),
         totalTokens: summary?.totalTokens ?? null,
         totalCostINR: summary?.totalCostINR ?? null,
-      });
+      }, webhookUrl);
 
       const urlList = Array.isArray(urls) ? urls : [urls];
       void ExtractionResultCache.set(type, urlList, extractedData, {
@@ -182,7 +184,7 @@ const processDocumentJob = async (job: Job): Promise<any> => {
           timestamp: new Date().toISOString(),
           totalTokens: summary?.totalTokens ?? null,
           totalCostINR: summary?.totalCostINR ?? null,
-        });
+        }, webhookUrl);
       }
 
       // Preserve cost snapshot for DLQ (async context ends after throw)
