@@ -89,10 +89,16 @@ When Laravel runs on a **different VPS**, expose aimodule so Laravel can call it
    curl http://<aimodule-vps-ip>:3000/health
    ```
 
-2. **Set `WEBHOOK_URL`** in aimodule VPS `.env` to Laravel's public HTTPS endpoint:
+2. **Set webhook URLs** in aimodule VPS `.env`:
    ```env
+   # Single Laravel backend:
    WEBHOOK_URL=https://api.theirdomain.com/api/webhooks/extraction-complete
+
+   # Two Laravel apps (.in + .com) — also set tenant URLs; Laravel sends X-Aimodule-Tenant header:
+   WEBHOOK_URL_IN=https://moval.techkrate.in/backend/api/ai-module/webhook/extraction-complete
+   WEBHOOK_URL_COM=https://moval.techkrate.com/backend/api/ai-module/webhook/extraction-complete
    ```
+   `docker-compose.yml` passes these from root `.env` into aimodule API and workers.
    Then redeploy: `docker compose up -d --build`
 
 3. **Share secrets** with Laravel team: `JWT_SECRET`, `WEBHOOK_SECRET` (must match exactly).

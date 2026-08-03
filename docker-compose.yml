@@ -11,6 +11,8 @@ x-aimodule-worker: &aimodule-worker
     NODE_ENV: production
     STORAGE_PROVIDER: gcp
     WEBHOOK_URL: ${WEBHOOK_URL:-http://test-backend:3001/api/webhook/extraction-complete}
+    WEBHOOK_URL_IN: ${WEBHOOK_URL_IN:-}
+    WEBHOOK_URL_COM: ${WEBHOOK_URL_COM:-}
     RUN_WORKERS: "true"
     RUN_DLQ_WORKER: "true"
     WORKSHOP_CHUNK_PAGE_SIZE: ${WORKSHOP_CHUNK_PAGE_SIZE:-2}
@@ -70,6 +72,8 @@ services:
       STORAGE_PROVIDER: gcp
       RUN_WORKERS: "false"
       WEBHOOK_URL: ${WEBHOOK_URL:-http://test-backend:3001/api/webhook/extraction-complete}
+      WEBHOOK_URL_IN: ${WEBHOOK_URL_IN:-}
+      WEBHOOK_URL_COM: ${WEBHOOK_URL_COM:-}
       WORKSHOP_CHUNK_PAGE_SIZE: ${WORKSHOP_CHUNK_PAGE_SIZE:-2}
       WORKSHOP_CHUNK_AI_MODEL: ${WORKSHOP_CHUNK_AI_MODEL:-gemini-3.1-flash-lite}
       WORKSHOP_MAX_OUTPUT_TOKENS: ${WORKSHOP_MAX_OUTPUT_TOKENS:-65536}
