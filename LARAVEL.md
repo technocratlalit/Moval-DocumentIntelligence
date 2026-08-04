@@ -59,10 +59,11 @@ Signed with `JWT_SECRET`, `expiresIn: 1h`.
   "urls": ["https://your-file-url.pdf"],
   "mode": "async",
   "documentId": "123",
-  "documentName": "workshop_bill.pdf",
-  "tableLayout": "sequential"
+  "documentName": "workshop_bill.pdf"
 }
 ```
+
+`tableLayout` is deprecated and ignored — the API always returns dynamic `parts` / `labour` tables (P/L unified bills are split automatically).
 
 **Responses:**
 
@@ -159,3 +160,59 @@ JWT_SECRET=<shared>
 ```
 
 Redeploy aimodule API **and** worker after updating `.env`.
+
+---
+
+## 6) Workshop result shape (breaking change)
+
+Webhook `result` for `documentType: "WORKSHOP"` now uses **dynamic PDF-faithful tables**:
+
+```json
+{
+  "workshopDetails": { "invoiceNumber": "...", "vehicleNumber": "...", "gstin": "..." },
+  "summary": { "partsSubtotalWithTax": 825795.21, "labourSubtotalWithTax": 224203.61, "grandTotal": 1049998.82 },
+  "parts": {
+    "section": "Spare Part Details",
+    "columns": ["Sr. No.", "Part No. (HSN Code)", "Part Description", "Qty", "Total Rs"],
+    "rows": [["1", "IA348530 (87089900)", "SUCTION LINE ASSY", "1.00", "2,940.01"]]
+  },
+  "labour": {
+    "section": "Labour Details",
+    "columns": ["Sr. No.", "Labour Description", "Total Amt."],
+    "rows": [["1", "FRONT AXLE WORK", "8,260.06"]]
+  },
+  "confidenceScore": 0.95,
+  "requiresHumanReview": false
+}
+```
+
+**P/L unified bills** (Honda-style insurance estimates) are split into `parts` + `labour` automatically (same columns, including `P/L`). Rows with `P` go to `parts`, rows with `L` go to `labour`:
+
+```json
+"parts": {
+  "section": "Body & Paint Work",
+  "columns": ["P/L", "Labor Code / Part#", "HSN / SAC", "Description", "..."],
+  "rows": [["P", "60211TXKK00ZZ", "87089900", "PANEL R.FR FENDER", "..."]]
+},
+"labour": {
+  "section": "Body & Paint Work",
+  "columns": ["P/L", "Labor Code / Part#", "HSN / SAC", "Description", "..."],
+  "rows": [["L", "PNTFRDRPNLM", "998714", "PAINT CHGS FRONT DOOR PANEL", "..."]]
+}
+```
+
+`lineItems` is no longer returned in the final webhook payload.
+
+**Removed fields:** `partsTable`, `labourTable`, `lineItemsTable`, `tableLayout`.
+
+**PHP — map a row to keyed fields:**
+
+```php
+$columns = $result['parts']['columns'];
+foreach ($result['parts']['rows'] as $row) {
+    $rowData = array_combine($columns, $row);
+    // $rowData['Net Amt / unit Rs.'], $rowData['Qty'], etc.
+}
+```
+
+Store the full `result` JSON blob as-is, or map columns to your DB when ready.

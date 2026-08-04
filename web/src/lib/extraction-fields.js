@@ -301,22 +301,36 @@ const POLICY_QUALITY = [
 
 // ── Workshop fields ───────────────────────────────────────────────────────────
 const WORKSHOP_META = [
-  'tableLayout', 'vehicleNumber', 'vehicleState', 'billType', 'grandTotalVerified',
+  'vehicleNumber', 'vehicleState', 'billType', 'grandTotalVerified',
   'isCorrectDocumentType', 'detectedDocumentType', 'hasAllPagesCorrectType',
   'invalidPageIndices', 'confidenceScore', 'requiresHumanReview',
 ]
-const LINE_ITEMS_COLUMNS = [
-  'rowIndex', 'rowType', 'sectionHeader', 'itemCode', 'hsnSac', 'description', 'uom',
-  'quantity', 'rate', 'partsCost', 'labourCost', 'taxableAmount', 'taxAmount', 'totalAmount',
+
+const WORKSHOP_DETAILS_KEYS = [
+  'name', 'gstin', 'invoiceNumber', 'invoiceDate', 'vehicleNumber',
+  'documentTitle', 'jobCardNumber', 'customerName', 'odometerReading',
 ]
-const PARTS_COLUMNS = [
-  'rowIndex', 'srNo', 'partNumber', 'hsnSac', 'description', 'uom', 'quantity',
-  'unitPrice', 'discount', 'taxableAmount', 'taxAmount', 'totalPrice', 'rowType',
+
+const WORKSHOP_SUMMARY_KEYS = [
+  'totalPartsAmount', 'totalLabourAmount', 'partsSubtotalWithTax', 'labourSubtotalWithTax',
+  'totalDiscount', 'totalGstAmount', 'igstRate', 'igstAmount', 'cgstRate', 'cgstAmount',
+  'sgstRate', 'sgstAmount', 'grandTotal', 'amountInWords',
 ]
-const LABOUR_COLUMNS = [
-  'rowIndex', 'srNo', 'labourCode', 'hsnSac', 'description', 'quantityOrHours', 'rate',
-  'grossAmount', 'discount', 'taxableAmount', 'taxAmount', 'totalAmount', 'rowType',
-]
+
+function zipDynamicTable(table) {
+  if (!table?.columns?.length) return []
+  return table.rows.map((row, i) => {
+    const obj = { rowIndex: String(i + 1) }
+    table.columns.forEach((col, j) => { obj[col] = row[j] ?? '' })
+    return obj
+  })
+}
+
+function dynamicTableTab(id, label, table) {
+  if (!table?.columns?.length) return null
+  const rows = zipDynamicTable(table)
+  return tableTab(id, label, formatTableRows(rows), table.columns)
+}
 
 function fieldTab(id, label, rows) {
   return { id, label, kind: 'fields', rows }
@@ -332,24 +346,6 @@ function tableTab(id, label, rows, columns) {
   }
 }
 
-/** True when at least one row has a printed bill serial number. */
-function hasAnyPrintedSrNo(rows) {
-  return rows?.some((r) => {
-    const n = Number(r?.srNo)
-    return Number.isFinite(n) && n > 0
-  })
-}
-
-/** Workshop tables: hide srNo column when the bill has no serial column. */
-function workshopTableTab(id, label, rows, baseColumns) {
-  const flat = flattenExtraColumns(rows)
-  const formatted = formatTableRows(flat)
-  const columns = hasAnyPrintedSrNo(flat)
-    ? baseColumns
-    : baseColumns.filter((c) => c !== 'srNo')
-  return tableTab(id, label, formatted, columns)
-}
-
 function formatTableRows(rows) {
   if (!rows?.length) return []
   return rows.map((row) => {
@@ -359,25 +355,6 @@ function formatTableRows(rows) {
       out[k] = k === 'opted' ? formatPolicyFieldValue('opted', v) : formatFieldValue(v)
     }
     return out
-  })
-}
-
-/**
- * Flattens the extraColumns array (ec[]) from each workshop row into sibling keys
- * so tableColumnsFromRows can auto-discover and display them as proper columns.
- * Each ec entry {key, value} becomes row[key] = value. The ec array is removed.
- */
-function flattenExtraColumns(rows) {
-  if (!rows?.length) return rows
-  return rows.map((row) => {
-    if (!row || typeof row !== 'object') return row
-    const { extraColumns, ...rest } = row
-    if (!Array.isArray(extraColumns) || extraColumns.length === 0) return rest
-    const flat = { ...rest }
-    for (const col of extraColumns) {
-      if (col?.key) flat[col.key] = col.value ?? null
-    }
-    return flat
   })
 }
 
@@ -488,19 +465,25 @@ export function buildInspectViews(documentType, result) {
     }
 
     case 'WORKSHOP': {
-      const isSequential = result.tableLayout === 'sequential' && (result.lineItemsTable?.length ?? 0) > 0
       const tabs = [
-        ...(isSequential
-          ? [workshopTableTab('lineItems', 'Line items', result.lineItemsTable, LINE_ITEMS_COLUMNS)]
-          : []),
-        workshopTableTab('parts', 'Parts table', result.partsTable, PARTS_COLUMNS),
-        workshopTableTab('labour', 'Labour table', result.labourTable, LABOUR_COLUMNS),
+        dynamicTableTab('parts', 'Parts', result.parts),
+        dynamicTableTab('labour', 'Labour', result.labour),
+        dynamicTableTab('lineItems', 'Line items', result.lineItems),
+        fieldTab('meta', 'Bill info', pickFieldRows(result.workshopDetails, WORKSHOP_DETAILS_KEYS)),
+        fieldTab('summary', 'Summary', pickFieldRows(result.summary, WORKSHOP_SUMMARY_KEYS)),
         fieldTab('quality', 'Quality', pickFieldRows(result, WORKSHOP_META)),
         extraFieldsTab(result),
         allTab,
         jsonTab,
       ].filter(Boolean)
-      return { tabs, defaultTab: isSequential ? 'lineItems' : 'parts' }
+      const defaultTab = result.parts?.rows?.length
+        ? 'parts'
+        : result.labour?.rows?.length
+          ? 'labour'
+          : result.lineItems?.rows?.length
+            ? 'lineItems'
+            : 'meta'
+      return { tabs, defaultTab }
     }
 
     default:

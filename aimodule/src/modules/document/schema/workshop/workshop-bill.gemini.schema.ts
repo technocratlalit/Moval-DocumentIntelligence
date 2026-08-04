@@ -1,13 +1,5 @@
 import { Schema, Type } from '@google/genai';
 
-const extraColumnItem: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    k: { type: Type.STRING, description: 'Original column header as printed on the bill' },
-    v: { type: Type.STRING, nullable: true, description: 'Cell value as string' },
-  },
-};
-
 const documentGateProps: Record<string, Schema> = {
   isCorrectDocumentType: {
     type: Type.BOOLEAN,
@@ -44,44 +36,76 @@ const documentGateProps: Record<string, Schema> = {
   },
 };
 
-const partsRowItem: Schema = {
+const workshopDetailsSchema: Schema = {
   type: Type.OBJECT,
+  nullable: true,
   properties: {
-    s: { type: Type.NUMBER, description: 'Sr. No.' },
-    pn: { type: Type.STRING, description: 'Part number / item code' },
-    h: { type: Type.STRING, description: 'HSN or SAC code' },
-    d: { type: Type.STRING, description: 'Part description' },
-    u: { type: Type.STRING, description: 'UoM (NOS, KG, etc.)' },
-    q: { type: Type.NUMBER, description: 'Qty' },
-    up: { type: Type.NUMBER, description: 'Unit price (Net Amt/unit, Rate, MRP, Unit Price)' },
-    dis: { type: Type.NUMBER, description: 'Line discount amount' },
-    ta: { type: Type.NUMBER, description: 'Taxable amount before tax' },
-    tx: { type: Type.NUMBER, description: 'Line tax — IGST/CGST/SGST amount' },
-    tp: { type: Type.NUMBER, description: 'Line total (Total Rs, Total Amt, Line Total)' },
-    rt: { type: Type.STRING, description: 'PART or COMBINED' },
-    ec: { type: Type.ARRAY, description: 'Unmapped columns — k=exact header, v=cell value', items: extraColumnItem },
+    name: { type: Type.STRING, nullable: true },
+    gstin: { type: Type.STRING, nullable: true },
+    invoiceNumber: { type: Type.STRING, nullable: true },
+    invoiceDate: { type: Type.STRING, nullable: true },
+    vehicleNumber: { type: Type.STRING, nullable: true },
+    documentTitle: { type: Type.STRING, nullable: true },
+    jobCardNumber: { type: Type.STRING, nullable: true },
+    customerName: { type: Type.STRING, nullable: true },
+    odometerReading: { type: Type.STRING, nullable: true },
   },
 };
 
-const labourRowItem: Schema = {
+const summarySchema: Schema = {
   type: Type.OBJECT,
+  nullable: true,
   properties: {
-    s: { type: Type.NUMBER, description: 'Sr. No.' },
-    lc: { type: Type.STRING, description: 'Labour / service code' },
-    h: { type: Type.STRING, description: 'HSN or SAC code' },
-    d: { type: Type.STRING, description: 'Service / labour description' },
-    qh: { type: Type.NUMBER, description: 'Hours or qty if printed — omit if flat amount only' },
-    r: { type: Type.NUMBER, description: 'Rate per hour/unit if printed' },
-    ga: { type: Type.NUMBER, description: 'Gross amount before discount/tax' },
-    dis: { type: Type.NUMBER, description: 'Line discount' },
-    ta: { type: Type.NUMBER, description: 'Taxable amount' },
-    tx: { type: Type.NUMBER, description: 'Line tax amount' },
-    tot: { type: Type.NUMBER, description: 'Line total (Total Amt, Labour Charges, Total Rs)' },
-    rt: { type: Type.STRING, description: 'LABOUR or COMBINED' },
-    ec: { type: Type.ARRAY, description: 'Unmapped columns — k=exact header, v=cell value', items: extraColumnItem },
+    grandTotal: { type: Type.NUMBER, nullable: true, description: 'Net bill amount / Grand Total as printed' },
+    partsSubTotal: { type: Type.NUMBER, nullable: true, description: 'Spare parts subtotal (with tax if printed that way)' },
+    labourSubTotal: { type: Type.NUMBER, nullable: true, description: 'Labour subtotal (with tax if printed that way)' },
   },
 };
 
+const arrayRow: Schema = {
+  type: Type.ARRAY,
+  items: { type: Type.STRING },
+};
+
+const columnsOnlyTableSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    section: {
+      type: Type.STRING,
+      nullable: true,
+      description: 'EXACT short PDF section title (e.g. "Spare Part Details")',
+    },
+    columns: {
+      type: Type.ARRAY,
+      description:
+        'EXACT PDF header strings in column order — count every cell (CGST % and CGST Amt are separate). NO rows.',
+      items: { type: Type.STRING },
+    },
+  },
+};
+
+const rowsOnlyTableSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    rows: {
+      type: Type.ARRAY,
+      description: 'Data rows as string arrays — one value per column in order given in prompt',
+      items: arrayRow,
+    },
+    section: {
+      type: Type.STRING,
+      nullable: true,
+      description: 'Only when this section first appears on this chunk and was unknown in meta pass',
+    },
+    columns: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: 'Only when section headers first seen on this chunk (e.g. Labour on page 9)',
+      items: { type: Type.STRING },
+    },
+  },
+  required: ['rows'],
+};
 
 const gateRequired = [
   'isCorrectDocumentType',
@@ -91,93 +115,39 @@ const gateRequired = [
   'requiresHumanReview',
 ];
 
-
-export const WorkshopLeanGeminiSchema: Schema = {
+/** Pass 1 — meta only: gate + details + summary + column headers (no rows). */
+export const WorkshopMetaSchema: Schema = {
   type: Type.OBJECT,
   properties: {
     ...documentGateProps,
-    partsTable: {
-      type: Type.ARRAY,
-      description: 'All spare parts / material line items from ALL pages. Use [] if none.',
-      items: partsRowItem,
-    },
-    labourTable: {
-      type: Type.ARRAY,
-      description: 'All labour / service line items from ALL pages. Use [] if none.',
-      items: labourRowItem,
-    },
-  },
-  required: gateRequired,
-};
-
-const arrayRow: Schema = {
-  type: Type.ARRAY,
-  items: { type: Type.STRING },
-};
-
-/** Lean single-pass array schema — gate fields + array-format tables. */
-export const WorkshopLeanArraySchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    ...documentGateProps,
-    partsTable: {
-      type: Type.ARRAY,
-      description: 'Parts rows as positional string arrays — see prompt for column order',
-      items: arrayRow,
-    },
-    labourTable: {
-      type: Type.ARRAY,
-      description: 'Labour rows as positional string arrays — see prompt for column order',
-      items: arrayRow,
-    },
-  },
-  required: gateRequired,
-};
-
-/** Chunk fallback array schema — array-format tables only (no gate fields). */
-export const WorkshopChunkArraySchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    partsTable: {
-      type: Type.ARRAY,
-      description: 'Parts rows as positional string arrays for this page slice',
-      items: arrayRow,
-    },
-    labourTable: {
-      type: Type.ARRAY,
-      description: 'Labour rows as positional string arrays for this page slice',
-      items: arrayRow,
-    },
-  },
-  required: ['partsTable', 'labourTable'],
-};
-
-/** Lean single-pass sequential schema — gate + lineItemsTable in document order. */
-export const WorkshopLeanArraySequentialSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    ...documentGateProps,
-    lineItemsTable: {
-      type: Type.ARRAY,
+    workshopDetails: workshopDetailsSchema,
+    summary: summarySchema,
+    billShape: {
+      type: Type.STRING,
       description:
-        'Line items in PDF order as positional string arrays — 13 core slots + optional header/value pairs from index 13',
-      items: arrayRow,
+        'split = separate Parts+Labour sections | pl_unified = P/L column (parts.columns = labour.columns = full headers) | unified_no_pl = one table, no P/L',
+    },
+    parts: columnsOnlyTableSchema,
+    labour: columnsOnlyTableSchema,
+    lineItems: {
+      ...columnsOnlyTableSchema,
+      nullable: true,
+      description: 'Internal routing for pl_unified rows pass only — not in final API output',
     },
   },
   required: gateRequired,
 };
 
-/** Chunk fallback sequential schema — lineItemsTable only (no gate fields). */
-export const WorkshopChunkArraySequentialSchema: Schema = {
+/** Pass 2 — rows only per chunk; columns injected via prompt. */
+export const WorkshopRowsOnlySchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    lineItemsTable: {
-      type: Type.ARRAY,
-      description:
-        'Line items in document order — 13 core slots + optional header/value extra pairs from index 13',
-      items: arrayRow,
+    parts: rowsOnlyTableSchema,
+    labour: rowsOnlyTableSchema,
+    lineItems: {
+      ...rowsOnlyTableSchema,
+      nullable: true,
+      description: 'Internal routing for pl_unified — all interleaved rows here; code splits into parts/labour',
     },
   },
-  required: ['lineItemsTable'],
 };
-

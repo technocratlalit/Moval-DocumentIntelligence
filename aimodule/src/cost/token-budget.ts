@@ -7,16 +7,26 @@ function parseCeiling(envCeiling: string | undefined, fallback: number): number 
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-export function computeWorkshopMaxTokens(pageCount: number, envCeiling?: string): number {
+/** Pass 1 meta — gate + columns only, no rows (~300–800 tokens). */
+export function computeWorkshopMetaMaxTokens(): number {
+  return 4096;
+}
+
+/** Pass 2 rows-only per chunk — compact string[][] output. */
+export function computeWorkshopRowsMaxTokens(
+  pageCount: number,
+  envCeiling?: string,
+  columnCount?: number,
+): number {
   const ceiling = parseCeiling(envCeiling, 65536);
-  // 20480 per page handles dense 17-column commercial vehicle bills (BharatBenz/DICV/Tata)
-  // with 50–65 rows per page. At 16384 a 3-page PDF landed exactly at the 49152 floor with
-  // zero headroom (49136/49152 used) causing repeated truncation even in chunk fallback.
-  // 20480 gives 3 pages → 61440, safely within the 65536 ceiling.
-  // Floor of 49152 still covers 1–2 page chunks without inflating their budget.
-  const perPage = 20480;
-  const floor = 49152;
+  const perPage = columnCount && columnCount >= 10 ? 8192 : 4096;
+  const floor = perPage;
   return Math.min(ceiling, Math.max(floor, pageCount * perPage));
+}
+
+/** @deprecated Use computeWorkshopMetaMaxTokens + computeWorkshopRowsMaxTokens */
+export function computeWorkshopMaxTokens(pageCount: number, envCeiling?: string): number {
+  return computeWorkshopRowsMaxTokens(pageCount, envCeiling);
 }
 
 export function computePolicyMaxTokens(pageCount: number, envCeiling?: string): number {
@@ -33,4 +43,11 @@ export function computeClaimMaxTokens(pageCount: number, envCeiling?: string): n
   const perPage = 2048;
   const floor = 4096;
   return Math.min(ceiling, Math.max(floor, pageCount * perPage));
+}
+
+// ponytail: self-check — run via `npx tsx aimodule/src/cost/token-budget.ts`
+if (process.argv[1]?.replace(/\\/g, '/').endsWith('token-budget.ts')) {
+  console.assert(computeWorkshopRowsMaxTokens(2, undefined, 11) === 16384, 'wide table budget');
+  console.assert(computeWorkshopRowsMaxTokens(1, undefined, 7) === 4096, 'narrow table budget');
+  console.log('token-budget self-check OK');
 }

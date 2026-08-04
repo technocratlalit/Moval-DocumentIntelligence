@@ -1,23 +1,18 @@
 import { createHash } from 'crypto';
 
-export type WorkshopTableLayout = 'split' | 'sequential';
-
 export interface ContentJobOptions {
-  tableLayout?: WorkshopTableLayout;
+  /** @deprecated Ignored — workshop output shape is unified */
+  tableLayout?: 'split' | 'sequential';
 }
 
-/** Stable id for dedup, result cache, and BullMQ jobId — sha256(type:sorted-urls[:layout])[0:16] */
+/** Stable id for dedup, result cache, and BullMQ jobId — sha256(type:sorted-urls)[0:16] */
 export function deriveContentJobId(
   type: string,
   urls: string[],
-  options: ContentJobOptions = {},
+  _options: ContentJobOptions = {},
 ): string {
-  const layoutSuffix =
-    type.toUpperCase() === 'WORKSHOP' && options.tableLayout === 'sequential'
-      ? ':sequential'
-      : '';
   return createHash('sha256')
-    .update(`${type}:${urls.slice().sort().join(',')}${layoutSuffix}`)
+    .update(`${type}:${urls.slice().sort().join(',')}`)
     .digest('hex')
     .slice(0, 16);
 }

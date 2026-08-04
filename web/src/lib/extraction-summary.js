@@ -39,12 +39,14 @@ export function rowSummary(job) {
         confidence: r.confidenceScore,
       }
     case 'WORKSHOP': {
-      const lineItemCount = r.lineItemsTable?.length ?? 0
-      const partsCount = r.partsTable?.length ?? 0
-      const labourCount = r.labourTable?.length ?? 0
-      const detail = lineItemCount > 0
-        ? `${lineItemCount} line items`
-        : `${partsCount} parts · ${labourCount} labour`
+      const partsCount = r.parts?.rows?.length ?? 0
+      const labourCount = r.labour?.rows?.length ?? 0
+      const lineItemCount = r.lineItems?.rows?.length ?? 0
+      const detail = partsCount > 0 || labourCount > 0
+        ? `${partsCount} parts · ${labourCount} labour`
+        : lineItemCount > 0
+          ? `${lineItemCount} line items`
+          : '0 rows'
       return {
         fileName,
         primary: r.invoiceNo ?? r.jobCardNo ?? r.workshopDetails?.invoiceNumber ?? '—',
