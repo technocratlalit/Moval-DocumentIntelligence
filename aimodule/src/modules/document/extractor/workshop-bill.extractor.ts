@@ -16,8 +16,12 @@ const POLL_TIMEOUT_MS = 10 * 60 * 1000;
 /** Long multi-page interleaved bills need higher tier for full row coverage */
 const EXTRACT_TIER = 'agentic_plus' as const;
 
-/** Indian workshop labour SAC commonly used on OEM job cards */
-const LABOUR_HSN = '998714';
+/** Indian service SAC range (e.g. Volvo 998714, Toyota 998729) */
+function isLabourHsn(hsn: string): boolean {
+  return /^\d+$/.test(hsn) && hsn.startsWith('99');
+}
+
+const SECTION_BANNER_RE = /^(labour|part)\s*charges?$/i;
 
 const REG_NO_RE =
   /\b(?:Reg\.?\s*No\.?|Regn\.?|Registration)\s*[:.]?\s*([A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{0,3}[-\s]?\d{1,4})\b/i;
@@ -102,13 +106,6 @@ function cellLooksNumeric(s: string): boolean {
   return /[\d]/.test(s.replace(/[,.\s%-]/g, ''));
 }
 
-/** Info banner / empty row: no HSN and no money-like cells */
-function isInfoOnlyRow(row: string[], hsnIdx: number, amountIdxs: number[]): boolean {
-  const hsn = hsnIdx >= 0 ? (row[hsnIdx] ?? '').replace(/\s/g, '') : '';
-  if (hsn.length >= 4 && /^\d+$/.test(hsn)) return false;
-  return !amountIdxs.some((i) => cellLooksNumeric(row[i] ?? ''));
-}
-
 function extractRegNoFromRows(rows: string[][]): string | null {
   for (const row of rows) {
     for (const cell of row) {
@@ -119,9 +116,37 @@ function extractRegNoFromRows(rows: string[][]): string | null {
   return null;
 }
 
+function isSectionBannerRow(row: string[]): boolean {
+  const first = row.find((c) => c.trim()) ?? '';
+  return SECTION_BANNER_RE.test(first.trim());
+}
+
+/** Pure vehicle-info banner (Reg. No. etc.) — not a table line item */
+function isVehicleInfoRow(row: string[]): boolean {
+  const joined = row.filter(Boolean).join(' ');
+  if (!joined) return true;
+  if (REG_NO_RE.test(joined) && !row.some((c, i) => i > 0 && cellLooksNumeric(c) && !REG_NO_RE.test(c))) {
+    // Reg. No. row with no separate priced cells
+    const onlyInfo = row.every((c) => !c || REG_NO_RE.test(c) || /^(ste|door|kmr|odo)/i.test(c));
+    if (onlyInfo || REG_NO_RE.test(joined)) {
+      // Skip if no line-item-looking code+desc pair beyond the reg text alone
+      const nonEmpty = row.filter((c) => c.trim());
+      return nonEmpty.length <= 2 && nonEmpty.some((c) => REG_NO_RE.test(c));
+    }
+  }
+  return false;
+}
+
+function hasLineItemText(row: string[], codeIdx: number, descIdx: number): boolean {
+  const code = codeIdx >= 0 ? (row[codeIdx] ?? '').trim() : '';
+  const desc = descIdx >= 0 ? (row[descIdx] ?? '').trim() : '';
+  if (code || desc) return true;
+  return row.some((c) => c.trim());
+}
+
 /**
  * Split combined lineItems into parts vs labour.
- * Labour = HSN/SAC 998714 (common Indian workshop labour SAC); everything else with data → parts.
+ * Labour = Indian service SAC (starts with 99); unpriced detail rows inherit last bucket.
  */
 export function splitLineItems(lineItems: DynamicTable): {
   parts: DynamicTable;
@@ -134,24 +159,31 @@ export function splitLineItems(lineItems: DynamicTable): {
   }
 
   const hsnIdx = findColumnIndex(columns, 'hsn/sac', 'hsn', 'sac');
-  const amountIdxs = [
-    findColumnIndex(columns, 'taxable'),
-    findColumnIndex(columns, 'unit price'),
-    findColumnIndex(columns, 'total'),
-    findColumnIndex(columns, 'cgst amt'),
-    findColumnIndex(columns, 'amount'),
-  ].filter((i) => i >= 0);
+  const codeIdx = findColumnIndex(columns, 'code / part', 'part no', 'part number', 'code');
+  const descIdx = findColumnIndex(columns, 'description', 'lab/part', 'particular');
 
   const partsRows: string[][] = [];
   const labourRows: string[][] = [];
   const vehicleFromRows = extractRegNoFromRows(lineItems.rows);
+  let lastIsLabour: boolean | null = null;
 
   for (const row of lineItems.rows) {
-    if (isInfoOnlyRow(row, hsnIdx, amountIdxs)) continue;
+    if (isSectionBannerRow(row)) continue;
+    if (isVehicleInfoRow(row)) continue;
+    if (!hasLineItemText(row, codeIdx, descIdx)) continue;
 
     const hsn = hsnIdx >= 0 ? (row[hsnIdx] ?? '').replace(/\s/g, '') : '';
-    if (hsn === LABOUR_HSN) labourRows.push(row);
-    else partsRows.push(row);
+    if (hsn.length >= 4 && /^\d+$/.test(hsn)) {
+      lastIsLabour = isLabourHsn(hsn);
+      if (lastIsLabour) labourRows.push(row);
+      else partsRows.push(row);
+      continue;
+    }
+
+    // Unpriced detail / continuation — keep and inherit previous labour/parts bucket
+    if (lastIsLabour === true) labourRows.push(row);
+    else if (lastIsLabour === false) partsRows.push(row);
+    else partsRows.push(row); // ponytail: no prior HSN → parts
   }
 
   return {
@@ -206,25 +238,31 @@ export function normalizeLlamaWorkshopResult(raw: unknown) {
   };
 }
 
-// ponytail: self-check — HSN split + Reg. No. scrape
+// ponytail: self-check — HSN split + detail-row inherit + Reg. No.
 {
-  const cols = ['SR. No.', 'HSN/SAC', 'Taxable Value', 'Description'];
+  const cols = ['Code / Part No', 'Description', 'SAC/HSN', 'QTY', 'Labour/Part Price'];
   const split = splitLineItems({
     columns: cols,
     rows: [
-      ['', '', '', 'Reg. No : JH-10CS-2856'],
-      ['1', '87089900', '100.00', 'BOLT'],
-      ['2', '998714', '500.00', 'LABOUR'],
-      ['3', '998714', '200.00', 'ALIGN'],
+      ['Labour Charges', '', '', '', ''],
+      ['52119PNP', 'Front Bumper Cover - Paint', '998729', '', '2,851.00'],
+      ['BODREP99', 'Others - Body Repair', '998729', '', '4,224.00'],
+      ['BODREP99', '- RIM REPLACE', '', '', ''],
+      ['BODREP99', '- ARM REPACE', '', '', ''],
+      ['BODREP99', '- DRIVE SHATF REPLACE', '', '', ''],
+      ['Part Charges', '', '', '', ''],
+      ['A-42611-WC020', 'WHEEL, DISC', '87087000', '1', '1,589.00'],
+      ['Reg. No : JH-10CS-2856', '', '', '', ''],
     ],
   });
-  console.assert(split.parts.rows.length === 1 && split.labour.rows.length === 2, 'splitLineItems HSN');
+  console.assert(split.labour.rows.length === 5, 'splitLineItems labour + BODREP99 details');
+  console.assert(split.parts.rows.length === 1, 'splitLineItems parts goods HSN');
   console.assert(split.vehicleFromRows?.includes('JH-10CS-2856'), 'splitLineItems Reg. No');
   const norm = normalizeLlamaWorkshopResult({
     workshopName: 'Test',
     invoiceNumber: null,
     vehicleNumber: null,
-    lineItems: { columns: cols, rows: [['1', '87089900', '10', 'X']] },
+    lineItems: { columns: cols, rows: [['A-1', 'BOLT', '87089900', '1', '10']] },
     grandTotal: 10,
   });
   console.assert(norm.parts.rows.length === 1 && norm.labour.rows.length === 0, 'normalize via lineItems');

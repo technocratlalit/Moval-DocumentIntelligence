@@ -16,8 +16,10 @@ const LlamaDynamicTableSchema = z.object({
   rows: z
     .array(z.array(z.string()))
     .describe(
-      'One inner array per line item; cell[i] matches columns[i]. ' +
+      'One inner array per printed table row; cell[i] matches columns[i]. ' +
         'Keep values exactly as printed (including commas and decimals). Use "" for blank cells. ' +
+        'Include unpriced detail/continuation rows under a parent (e.g. same code BODREP99 with ' +
+        'description "- RIM REPLACE" and blank SAC/QTY/price) — do not drop them. ' +
         'When a cell wraps across lines in the PDF, join with a single space — never use HTML ' +
         '(no <br>, <br/>, or entities).',
     ),
@@ -44,8 +46,10 @@ export const LlamaWorkshopExtractSchema = z.object({
     'ONE combined table of ALL line items from EVERY page of the PDF, in document order. ' +
       'Include both spare-parts/material rows AND labour/service rows when they share the same ' +
       'printed Lab/Part table (interleaved serial numbers are normal — do not skip either group). ' +
+      'Include unpriced detail/sub-description rows under a parent line. ' +
       'Do not split into parts vs labour here. Do not omit rows. Do not stop early. ' +
-      'Skip only pure totals/grand-total summary rows and HSN tax-summary tables at the end. ' +
+      'Skip only section title rows (Labour Charges / Part Charges), pure totals/grand-total ' +
+      'summary rows, and HSN tax-summary tables at the end. ' +
       'Optional vehicle-info banner rows (Ste/Door/KMR/Reg. No.) may be included if present.',
   ),
   grandTotal: z
