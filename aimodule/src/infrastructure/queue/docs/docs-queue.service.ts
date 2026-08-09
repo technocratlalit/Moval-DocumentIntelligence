@@ -4,7 +4,7 @@ import { QueueOverloadedError, JobTimeoutError } from '../../../shared/errors/ap
 import { _config } from '../../../config/config.js';
 import { getCorrelationId } from '../../../shared/context/correlation.context.js';
 import { ObserverService } from '../../observabllity/observer.service.js';
-import { deriveContentJobId, type ContentJobOptions } from '../../../cost/job-id.util.js';
+import { deriveContentJobId } from '../../../cost/job-id.util.js';
 import { ExtractionResultCache } from '../../../cost/result-cache.service.js';
 import type { JobPriorityLevel } from '../../../cost/types.js';
 import { AdminService } from '../../../modules/admin/admin.service.js';
@@ -12,7 +12,7 @@ import type { WebhookTenant } from '../../webhook/webhook-url.util.js';
 
 export { deriveContentJobId };
 
-export interface EnqueueOptions extends ContentJobOptions {
+export interface EnqueueOptions {
   priorityLevel?: JobPriorityLevel;
   documentName?: string;   // human-readable file/doc name, e.g. 'vehicle_rc_front.jpg'
   documentId?: string;     // DB record ID from caller (e.g. Laravel document ID)
@@ -64,18 +64,9 @@ export class DocsQueueService {
     options: EnqueueOptions = {},
   ): Promise<EnqueueResult> {
     return DocsQueueService.mutex.runExclusive(async () => {
-    const typeUpper = type.toUpperCase();
-    const resolvedTableLayout =
-      typeUpper === 'WORKSHOP'
-        ? (options.tableLayout === 'split' ? 'split' : 'sequential')
-        : options.tableLayout;
+    const contentJobId = deriveContentJobId(type, urls);
 
-    const cacheOptions: ContentJobOptions = {
-      tableLayout: resolvedTableLayout,
-    };
-    const contentJobId = deriveContentJobId(type, urls, cacheOptions);
-
-    const cached = await ExtractionResultCache.get(type, urls, cacheOptions);
+    const cached = await ExtractionResultCache.get(type, urls);
     if (cached != null) {
       return {
         job: { id: contentJobId } as Job,
@@ -102,7 +93,6 @@ export class DocsQueueService {
         correlationId,
         documentName: options.documentName ?? 'unknown',
         documentId: options.documentId ?? 'unknown',
-        tableLayout: resolvedTableLayout,
         tenant: options.tenant,
       },
       { priority, jobId: contentJobId },

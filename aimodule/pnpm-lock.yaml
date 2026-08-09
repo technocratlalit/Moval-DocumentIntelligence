@@ -14,6 +14,9 @@ importers:
       '@google/genai':
         specifier: ^2.8.0
         version: 2.12.0
+      '@llamaindex/llama-cloud':
+        specifier: ^2.13.0
+        version: 2.13.0
       axios:
         specifier: ^1.18.0
         version: 1.18.1(debug@4.4.3)
@@ -473,6 +476,9 @@ packages:
 
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
+
+  '@llamaindex/llama-cloud@2.13.0':
+    resolution: {integrity: sha512-6FXtNuMc+pE5GlWzEdUhyBZZt4bL764zaU2SnHswAi+VfPC92kc9BCjfpKPJVHwfXv7H83iLV3s71EbBi2fIFQ==}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     resolution: {integrity: sha512-LCkGo6JDfaBhgST7UpPWgNgLINpcpabaHfyz5OBx75nUYxBsaEPxjnyNjWpeb/xBup/682QnBfRBy2/LvPutZQ==}
@@ -2113,6 +2119,8 @@ snapshots:
   '@ioredis/commands@1.5.1': {}
 
   '@js-sdsl/ordered-map@4.4.2': {}
+
+  '@llamaindex/llama-cloud@2.13.0': {}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true

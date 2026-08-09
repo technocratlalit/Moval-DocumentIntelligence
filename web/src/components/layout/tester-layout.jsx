@@ -25,9 +25,9 @@ import {
 const navItems = [
   { to: '/test/rc',       label: 'RC',              icon: CarFrontIcon,       end: false },
   { to: '/test/dl',       label: 'Driving Licence', icon: FileTextIcon,       end: false },
-  { to: '/test/workshop', label: 'Workshop Bill',   icon: WrenchIcon,         end: false },
   { to: '/test/policy',   label: 'Insurance Policy',icon: ShieldCheckIcon,    end: false },
   { to: '/test/claim',    label: 'Claim Form',      icon: ClipboardListIcon,  end: false },
+  { to: '/test/workshop', label: 'Workshop Bill',   icon: WrenchIcon,         end: false },
 ]
 
 export function TesterLayout() {

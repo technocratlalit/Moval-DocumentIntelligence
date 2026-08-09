@@ -12,8 +12,6 @@ export const ExtractDocumentSchema = z.object({
     mode: z.enum(['sync', 'async']).optional(),
     /** urgent | normal | low — maps to QUEUE_PRIORITY_* in .env */
     priority: z.enum(['urgent', 'normal', 'low']).optional(),
-    /** WORKSHOP only: deprecated — ignored; output is always dynamic parts/labour/lineItems */
-    tableLayout: z.enum(['split', 'sequential']).optional(),
   }),
 });
 

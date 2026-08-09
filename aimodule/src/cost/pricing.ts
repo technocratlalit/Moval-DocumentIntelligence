@@ -40,7 +40,7 @@ export function resolvePricingTier(model: string): PricingTier {
   ) {
     return 'lite';
   }
-  if (eq(_config.AI_MODEL_PRO) || eq(_config.WORKSHOP_AI_MODEL) || eq(_config.POLICY_AI_MODEL)) {
+  if (eq(_config.AI_MODEL_PRO) || eq(_config.POLICY_AI_MODEL)) {
     return 'pro';
   }
   if (eq(_config.AI_MODEL)) return 'default';

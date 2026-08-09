@@ -37,17 +37,15 @@ const {
   STORAGE_PROVIDER,
   GEMINI_API_KEY,
   GEMINI_API_KEY_LABEL,
+  LLAMA_CLOUD_API_KEY,
   AI_MODEL,
   AI_MODEL_LITE,
   AI_MODEL_PRO,
   RC_AI_MODEL,
   DL_AI_MODEL,
-  WORKSHOP_AI_MODEL,
-  WORKSHOP_CHUNK_AI_MODEL,
   POLICY_AI_MODEL,
   RC_MAX_OUTPUT_TOKENS,
   DL_MAX_OUTPUT_TOKENS,
-  WORKSHOP_MAX_OUTPUT_TOKENS,
   POLICY_MAX_OUTPUT_TOKENS,
   REDIS_QUEUE_URI,
   GCS_BUCKET_NAME,
@@ -99,8 +97,6 @@ const {
   RESULT_CACHE_ENABLED,
   RESULT_CACHE_TTL_SECONDS,
   DEFAULT_EXTRACT_MODE,
-  WORKSHOP_CHUNK_PAGE_SIZE,
-  WORKSHOP_MAX_GEMINI_RETRIES,
   POLICY_MAX_GEMINI_RETRIES,
   RC_MAX_GEMINI_RETRIES,
   DL_MAX_GEMINI_RETRIES,
@@ -141,25 +137,21 @@ export const _config = {
   // Gemini
   GEMINI_API_KEY,
   GEMINI_API_KEY_LABEL,
+
+  // LlamaCloud Extract (workshop bills)
+  LLAMA_CLOUD_API_KEY,
+
   AI_MODEL:          resolvedAiModel,
   AI_MODEL_LITE:     resolvedAiModelLite,
   AI_MODEL_PRO:        resolvedAiModelPro,
   RC_AI_MODEL:       parseEnvOptional(RC_AI_MODEL)       ?? resolvedAiModelLite,
   DL_AI_MODEL:       parseEnvOptional(DL_AI_MODEL)       ?? resolvedAiModelLite,
-  WORKSHOP_AI_MODEL:       parseEnvOptional(WORKSHOP_AI_MODEL)       ?? resolvedAiModelPro,
-  /** Model used for chunk-fallback passes (meta + per-chunk). Defaults to AI_MODEL_LITE to save cost. */
-  WORKSHOP_CHUNK_AI_MODEL: parseEnvOptional(WORKSHOP_CHUNK_AI_MODEL) ?? resolvedAiModelLite,
   POLICY_AI_MODEL:         parseEnvOptional(POLICY_AI_MODEL)         ?? resolvedAiModelPro,
 
   // Token ceilings (string — parsed at call site or via cost/token-budget.ts)
   RC_MAX_OUTPUT_TOKENS,
   DL_MAX_OUTPUT_TOKENS,
-  WORKSHOP_MAX_OUTPUT_TOKENS,
   POLICY_MAX_OUTPUT_TOKENS,
-  /** Pages per local PDF slice when extracting per chunk (default 2). */
-  WORKSHOP_CHUNK_PAGE_SIZE: parseEnvInt(WORKSHOP_CHUNK_PAGE_SIZE, 2),
-  /** Gemini retries per workshop call — 1 avoids 3× cost on transient errors (default 1). */
-  WORKSHOP_MAX_GEMINI_RETRIES: parseEnvInt(WORKSHOP_MAX_GEMINI_RETRIES, 1),
   /** Gemini retries per policy call (default 1). */
   POLICY_MAX_GEMINI_RETRIES: parseEnvInt(POLICY_MAX_GEMINI_RETRIES, 1),
   /** Gemini retries per RC call (default 1). */

@@ -8,7 +8,7 @@ import { _config } from '../../config/config.js';
 import { ApiError } from '../../shared/apiError.js';
 import { applyClaimFields } from './apply-claim-fields.js';
 
-const VALID_TYPES = ['RC', 'DL', 'WORKSHOP', 'POLICY', 'CLAIM'];
+const VALID_TYPES = ['RC', 'DL', 'POLICY', 'CLAIM', 'WORKSHOP'];
 
 function defaultMode(documentType) {
   return documentType === 'RC' || documentType === 'DL' ? 'sync' : 'async';
@@ -35,7 +35,6 @@ export class ExtractionService {
     urls: directUrls,
     mode, 
     priority = 'normal',
-    tableLayout,
     correlationId: providedCorrelationId,
   }) {
     const type = (documentType ?? '').toUpperCase();
@@ -62,10 +61,6 @@ export class ExtractionService {
 
     const extractMode = mode ?? defaultMode(type);
     const extractPriority = ['urgent', 'normal', 'low'].includes(priority) ? priority : 'normal';
-    const extractTableLayout =
-      type === 'WORKSHOP'
-        ? (tableLayout === 'split' ? 'split' : 'sequential')
-        : undefined;
     const correlationId = providedCorrelationId ?? randomUUID();
 
     const job = await ExtractionJob.create({
@@ -75,7 +70,6 @@ export class ExtractionService {
       urls,
       mode: extractMode,
       priority: extractPriority,
-      tableLayout: extractTableLayout,
       status: extractMode === 'async' ? 'queued' : 'processing',
     });
 
@@ -106,7 +100,6 @@ export class ExtractionService {
           priority: extractPriority,
           documentName,
           documentId,
-          ...(type === 'WORKSHOP' ? { tableLayout: extractTableLayout } : {}),
         },
         {
           headers: {

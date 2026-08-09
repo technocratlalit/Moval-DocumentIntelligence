@@ -3,9 +3,9 @@ import { formatPolicyFieldValue, normalizePolicyResult } from '@/lib/extraction-
 export const DOC_TYPES = [
   { id: 'RC', label: 'RC', purpose: 'rc' },
   { id: 'DL', label: 'DL', purpose: 'dl' },
-  { id: 'WORKSHOP', label: 'Workshop', purpose: 'workshop' },
   { id: 'POLICY', label: 'Insurance Policy', purpose: 'policy' },
   { id: 'CLAIM', label: 'Claim Form', purpose: 'claim' },
+  { id: 'WORKSHOP', label: 'Workshop Bill', purpose: 'workshop' },
 ]
 
 export function getDocMeta(type) {
@@ -38,25 +38,6 @@ export function rowSummary(job) {
         tertiary: r.validityNT ?? r.validityT ?? '—',
         confidence: r.confidenceScore,
       }
-    case 'WORKSHOP': {
-      const partsCount = r.parts?.rows?.length ?? 0
-      const labourCount = r.labour?.rows?.length ?? 0
-      const lineItemCount = r.lineItems?.rows?.length ?? 0
-      const detail = partsCount > 0 || labourCount > 0
-        ? `${partsCount} parts · ${labourCount} labour`
-        : lineItemCount > 0
-          ? `${lineItemCount} line items`
-          : '0 rows'
-      return {
-        fileName,
-        primary: r.invoiceNo ?? r.jobCardNo ?? r.workshopDetails?.invoiceNumber ?? '—',
-        secondary: r.vehicleNo ?? r.vehicleNumber ?? r.workshopDetails?.vehicleNumber ?? '—',
-        tertiary: r.summary?.grandTotal != null
-          ? `₹${r.summary.grandTotal}`
-          : detail,
-        confidence: r.confidenceScore,
-      }
-    }
     case 'POLICY': {
       const p = normalizePolicyResult(r)
       const reg = p.registrationNo
@@ -81,6 +62,18 @@ export function rowSummary(job) {
         tertiary: r.accidentDate ?? r.registrationNo ?? '—',
         confidence: r.additionalData?.confidenceScore ?? r.confidenceScore,
       }
+    case 'WORKSHOP': {
+      const d = r.workshopDetails ?? {}
+      const partsRows = r.parts?.rows?.length ?? 0
+      const labourRows = r.labour?.rows?.length ?? 0
+      return {
+        fileName,
+        primary: d.invoiceNumber ?? d.documentTitle ?? '—',
+        secondary: d.vehicleNumber ?? d.name ?? '—',
+        tertiary: `Parts ${partsRows} · Labour ${labourRows}`,
+        confidence: r.confidenceScore,
+      }
+    }
     default:
       return { fileName, primary: '—', secondary: '—', tertiary: '—', confidence: null }
   }

@@ -16,7 +16,6 @@ const chartConfig = { waiting: { label: 'Waiting', color: 'var(--chart-1)' } }
 const BAR_COLORS = {
   rc: 'hsl(221 83% 53%)',
   dl: 'hsl(142 71% 45%)',
-  workshop: 'hsl(25 95% 53%)',
   insurance: 'hsl(271 81% 56%)',
   'dead-letter': 'hsl(0 72% 51%)',
 }

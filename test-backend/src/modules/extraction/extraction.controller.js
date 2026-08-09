@@ -7,7 +7,7 @@ const extractionService = new ExtractionService();
 
 export class ExtractionController {
   createExtraction = asyncHandler(async (req, res) => {
-    const { documentType, uploadIds, urls, mode, priority, correlationId, tableLayout } = req.body;
+    const { documentType, uploadIds, urls, mode, priority, correlationId } = req.body;
     const job = await extractionService.createExtraction({
       documentType,
       uploadIds,
@@ -15,7 +15,6 @@ export class ExtractionController {
       mode,
       priority,
       correlationId,
-      tableLayout,
     });
     res.status(201).json(new ApiResponse(201, job, 'Extraction started.'));
   });

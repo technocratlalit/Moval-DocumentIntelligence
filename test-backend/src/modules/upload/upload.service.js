@@ -2,7 +2,7 @@ import { Upload } from '../../model/upload.schema.js';
 import { ApiError } from '../../shared/apiError.js';
 import { createPresignedUploadUrl, deleteR2Object } from './r2.storage.js';
 
-const VALID_PURPOSES = ['rc', 'dl', 'workshop', 'policy', 'other'];
+const VALID_PURPOSES = ['rc', 'dl', 'policy', 'claim', 'workshop', 'other'];
 
 export class UploadService {
   async requestUploadUrl(filename, contentType, purpose = 'other') {

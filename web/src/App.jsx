@@ -7,9 +7,9 @@ import { DashboardPage } from '@/pages/dashboard-page'
 import { DLQPage } from '@/pages/dlq-page'
 import { RCTestPage } from '@/pages/rc-test-page'
 import { DLTestPage } from '@/pages/dl-test-page'
-import { WorkshopTestPage } from '@/pages/workshop-test-page'
 import { PolicyTestPage } from '@/pages/policy-test-page'
 import { ClaimTestPage } from '@/pages/claim-test-page'
+import { WorkshopTestPage } from '@/pages/workshop-test-page'
 
 function App() {
   return (
@@ -26,9 +26,9 @@ function App() {
           <Route index element={<Navigate to="/test/rc" replace />} />
           <Route path="rc"       element={<RCTestPage />} />
           <Route path="dl"       element={<DLTestPage />} />
-          <Route path="workshop" element={<WorkshopTestPage />} />
           <Route path="policy"   element={<PolicyTestPage />} />
           <Route path="claim"    element={<ClaimTestPage />} />
+          <Route path="workshop" element={<WorkshopTestPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/login" replace />} />

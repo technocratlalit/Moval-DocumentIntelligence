@@ -24,6 +24,7 @@
   "dependencies": {
     "@google-cloud/storage": "^7.21.0",
     "@google/genai": "^2.8.0",
+    "@llamaindex/llama-cloud": "^2.13.0",
     "axios": "^1.18.0",
     "bullmq": "^5.78.1",
     "cors": "^2.8.6",

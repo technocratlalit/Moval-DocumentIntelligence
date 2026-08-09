@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Request, Response } from 'express';
 import { DocsQueueService } from '../../infrastructure/queue/docs/docs-queue.service.js';
 import { QueueOverloadedError } from '../../shared/errors/apiError.js';
 import { asyncHandler } from '../../shared/middleware/asyncHandler.middleware.js';
@@ -78,7 +78,7 @@ export class DocumentController {
   private docsQueueService = new DocsQueueService();
 
   public extractDocument = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-    const { type, urls, mode, priority, documentName, documentId, tableLayout } = req.body;
+    const { type, urls, mode, priority, documentName, documentId } = req.body;
     const finalUrls = resolveUrls(urls);
 
     if (!type || finalUrls.length === 0) {
@@ -100,7 +100,6 @@ export class DocumentController {
       return;
     }
 
-   
     const typeUpper = (type as string).toUpperCase();
     const smartDefault =
       typeUpper === 'RC' || typeUpper === 'DL' ? 'sync' : 'async';
@@ -108,16 +107,10 @@ export class DocumentController {
     const priorityLevel = (priority ?? 'normal') as JobPriorityLevel;
 
     try {
-      const workshopTableLayout =
-        typeUpper === 'WORKSHOP'
-          ? (tableLayout === 'split' ? 'split' : 'sequential')
-          : undefined;
-
       const enqueueResult = await this.docsQueueService.enqueueDocument(type, finalUrls, {
         priorityLevel,
         documentName,
         documentId,
-        tableLayout: workshopTableLayout,
         tenant,
       });
 

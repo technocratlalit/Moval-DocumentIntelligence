@@ -299,37 +299,45 @@ const POLICY_QUALITY = [
   { key: 'requiresHumanReview', label: 'Requires human review' },
 ]
 
-// ── Workshop fields ───────────────────────────────────────────────────────────
-const WORKSHOP_META = [
-  'vehicleNumber', 'vehicleState', 'billType', 'grandTotalVerified',
-  'isCorrectDocumentType', 'detectedDocumentType', 'hasAllPagesCorrectType',
-  'invalidPageIndices', 'confidenceScore', 'requiresHumanReview',
-]
-
-const WORKSHOP_DETAILS_KEYS = [
+// ── Workshop bill fields ─────────────────────────────────────────────────────
+const WORKSHOP_DETAILS = [
   'name', 'gstin', 'invoiceNumber', 'invoiceDate', 'vehicleNumber',
   'documentTitle', 'jobCardNumber', 'customerName', 'odometerReading',
 ]
-
-const WORKSHOP_SUMMARY_KEYS = [
+const WORKSHOP_SUMMARY = [
   'totalPartsAmount', 'totalLabourAmount', 'partsSubtotalWithTax', 'labourSubtotalWithTax',
   'totalDiscount', 'totalGstAmount', 'igstRate', 'igstAmount', 'cgstRate', 'cgstAmount',
   'sgstRate', 'sgstAmount', 'grandTotal', 'amountInWords',
 ]
+const WORKSHOP_QUALITY = [
+  'isCorrectDocumentType', 'detectedDocumentType', 'hasAllPagesCorrectType',
+  'invalidPageIndices', 'confidenceScore', 'requiresHumanReview',
+]
+
+function uniqueDisplayColumns(columns = []) {
+  const seen = new Map()
+  return columns.map((col) => {
+    const n = (seen.get(col) ?? 0) + 1
+    seen.set(col, n)
+    return n > 1 ? `${col} (${n})` : col
+  })
+}
 
 function zipDynamicTable(table) {
   if (!table?.columns?.length) return []
-  return table.rows.map((row, i) => {
+  const displayCols = uniqueDisplayColumns(table.columns)
+  return (table.rows ?? []).map((row, i) => {
     const obj = { rowIndex: String(i + 1) }
-    table.columns.forEach((col, j) => { obj[col] = row[j] ?? '' })
+    displayCols.forEach((col, j) => { obj[col] = row[j] ?? '' })
     return obj
   })
 }
 
 function dynamicTableTab(id, label, table) {
   if (!table?.columns?.length) return null
+  const displayCols = uniqueDisplayColumns(table.columns)
   const rows = zipDynamicTable(table)
-  return tableTab(id, label, formatTableRows(rows), table.columns)
+  return tableTab(id, label, formatTableRows(rows), displayCols)
 }
 
 function fieldTab(id, label, rows) {
@@ -465,25 +473,29 @@ export function buildInspectViews(documentType, result) {
     }
 
     case 'WORKSHOP': {
+      const details = result.workshopDetails ?? {}
+      const summary = result.summary ?? {}
+      const overviewRows = [
+        { key: 'invoiceNumber', value: formatFieldValue(details.invoiceNumber) },
+        { key: 'vehicleNumber', value: formatFieldValue(details.vehicleNumber) },
+        { key: 'name', value: formatFieldValue(details.name) },
+        { key: 'grandTotal', value: formatFieldValue(summary.grandTotal) },
+        { key: 'partsRows', value: formatFieldValue(result.parts?.rows?.length ?? 0) },
+        { key: 'labourRows', value: formatFieldValue(result.labour?.rows?.length ?? 0) },
+      ]
       const tabs = [
+        fieldTab('overview', 'Overview', overviewRows),
+        fieldTab('details', 'Workshop details', pickFieldRows(details, WORKSHOP_DETAILS)),
+        fieldTab('summary', 'Summary', pickFieldRows(summary, WORKSHOP_SUMMARY)),
         dynamicTableTab('parts', 'Parts', result.parts),
         dynamicTableTab('labour', 'Labour', result.labour),
         dynamicTableTab('lineItems', 'Line items', result.lineItems),
-        fieldTab('meta', 'Bill info', pickFieldRows(result.workshopDetails, WORKSHOP_DETAILS_KEYS)),
-        fieldTab('summary', 'Summary', pickFieldRows(result.summary, WORKSHOP_SUMMARY_KEYS)),
-        fieldTab('quality', 'Quality', pickFieldRows(result, WORKSHOP_META)),
+        fieldTab('quality', 'Quality', pickFieldRows(result, WORKSHOP_QUALITY)),
         extraFieldsTab(result),
         allTab,
         jsonTab,
       ].filter(Boolean)
-      const defaultTab = result.parts?.rows?.length
-        ? 'parts'
-        : result.labour?.rows?.length
-          ? 'labour'
-          : result.lineItems?.rows?.length
-            ? 'lineItems'
-            : 'meta'
-      return { tabs, defaultTab }
+      return { tabs, defaultTab: 'overview' }
     }
 
     default:
