@@ -305,12 +305,14 @@ const WORKSHOP_DETAILS = [
   'documentTitle', 'jobCardNumber', 'customerName', 'odometerReading',
 ]
 const WORKSHOP_SUMMARY = [
+  'partsTotal', 'labourTotal',
   'totalPartsAmount', 'totalLabourAmount', 'partsSubtotalWithTax', 'labourSubtotalWithTax',
   'totalDiscount', 'totalGstAmount', 'igstRate', 'igstAmount', 'cgstRate', 'cgstAmount',
   'sgstRate', 'sgstAmount', 'grandTotal', 'amountInWords',
 ]
 const WORKSHOP_QUALITY = [
-  'isCorrectDocumentType', 'detectedDocumentType', 'hasAllPagesCorrectType',
+  'isCorrectDocumentType', 'detectedDocumentType', 'documentType',
+  'hasAllPagesCorrectType',
   'invalidPageIndices', 'confidenceScore', 'requiresHumanReview',
 ]
 
@@ -476,19 +478,54 @@ export function buildInspectViews(documentType, result) {
       const details = result.workshopDetails ?? {}
       const summary = result.summary ?? {}
       const overviewRows = [
+        { key: 'documentType', value: formatFieldValue(result.documentType) },
         { key: 'invoiceNumber', value: formatFieldValue(details.invoiceNumber) },
         { key: 'vehicleNumber', value: formatFieldValue(details.vehicleNumber) },
         { key: 'name', value: formatFieldValue(details.name) },
         { key: 'grandTotal', value: formatFieldValue(summary.grandTotal) },
+        { key: 'partsTotal', value: formatFieldValue(summary.partsTotal) },
+        { key: 'labourTotal', value: formatFieldValue(summary.labourTotal) },
         { key: 'partsRows', value: formatFieldValue(result.parts?.rows?.length ?? 0) },
         { key: 'labourRows', value: formatFieldValue(result.labour?.rows?.length ?? 0) },
+        { key: 'repairGroups', value: formatFieldValue(result.repairGroups?.length ?? 0) },
+        { key: 'notes', value: formatFieldValue(result.notes?.length ?? 0) },
       ]
+      const repairEstimateRows = (result.repairEstimates ?? []).map((e, i) => ({
+        key: `estimate_${i + 1}`,
+        value: formatFieldValue(
+          [e.partNo, e.description, e.demandType, e.total != null ? `total=${e.total}` : null]
+            .filter(Boolean)
+            .join(' · '),
+        ),
+      }))
+      const noteRows = (result.notes ?? []).map((n, i) => ({
+        key: `note_${i + 1}`,
+        value: formatFieldValue(n),
+      }))
+      const groupRows = (result.repairGroups ?? []).map((g) => ({
+        key: g.id,
+        value: formatFieldValue(`${g.title} (${g.members?.length ?? 0} members)`),
+      }))
+      const hintRows = (result.labourServiceHints ?? []).map((h, i) => ({
+        key: `labour_${i + 1}`,
+        value: formatFieldValue(h),
+      }))
       const tabs = [
         fieldTab('overview', 'Overview', overviewRows),
         fieldTab('details', 'Workshop details', pickFieldRows(details, WORKSHOP_DETAILS)),
         fieldTab('summary', 'Summary', pickFieldRows(summary, WORKSHOP_SUMMARY)),
         dynamicTableTab('parts', 'Parts', result.parts),
         dynamicTableTab('labour', 'Labour', result.labour),
+        result.misc?.rows?.length ? dynamicTableTab('misc', 'Miscellaneous', result.misc) : null,
+        result.undefinedParts?.rows?.length
+          ? dynamicTableTab('undefinedParts', 'Undefined parts', result.undefinedParts)
+          : null,
+        groupRows.length ? fieldTab('repairGroups', 'Repair groups', groupRows) : null,
+        repairEstimateRows.length
+          ? fieldTab('repairEstimates', 'Repair estimates', repairEstimateRows)
+          : null,
+        noteRows.length ? fieldTab('notes', 'Notes', noteRows) : null,
+        hintRows.length ? fieldTab('serviceHints', 'Labour service hints', hintRows) : null,
         dynamicTableTab('lineItems', 'Line items', result.lineItems),
         fieldTab('quality', 'Quality', pickFieldRows(result, WORKSHOP_QUALITY)),
         extraFieldsTab(result),

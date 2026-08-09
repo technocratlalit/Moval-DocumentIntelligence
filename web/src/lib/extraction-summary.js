@@ -66,11 +66,12 @@ export function rowSummary(job) {
       const d = r.workshopDetails ?? {}
       const partsRows = r.parts?.rows?.length ?? 0
       const labourRows = r.labour?.rows?.length ?? 0
+      const docType = r.documentType ? `${r.documentType} · ` : ''
       return {
         fileName,
         primary: d.invoiceNumber ?? d.documentTitle ?? '—',
         secondary: d.vehicleNumber ?? d.name ?? '—',
-        tertiary: `Parts ${partsRows} · Labour ${labourRows}`,
+        tertiary: `${docType}Parts ${partsRows} · Labour ${labourRows}`,
         confidence: r.confidenceScore,
       }
     }

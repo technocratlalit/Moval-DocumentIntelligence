@@ -9,19 +9,21 @@ const LlamaDynamicTableSchema = z.object({
     .array(z.string())
     .describe(
       'Exact table column headers as printed on the PDF (usually page 1). ' +
-        'Reuse the same headers on continuation pages even if headers are not reprinted. ' +
-        'Do not invent, rename, or drop columns. For nested tax headers (e.g. CGST Rate / CGST Amt), ' +
-        'use the leaf labels as separate column names.',
+        'Reuse the SAME headers on EVERY continuation page even if headers are not reprinted — ' +
+        'page break is not a new section. Include P/L and/or Type columns when printed. ' +
+        'Do not invent, rename, or drop columns. Nested tax headers → leaf labels as separate columns. ' +
+        'Keep quantity/UOM columns as printed (do not force integers).',
     ),
   rows: z
     .array(z.array(z.string()))
     .describe(
-      'One inner array per printed table row; cell[i] matches columns[i]. ' +
-        'Keep values exactly as printed (including commas and decimals). Use "" for blank cells. ' +
-        'Include unpriced detail/continuation rows under a parent (e.g. same code BODREP99 with ' +
-        'description "- RIM REPLACE" and blank SAC/QTY/price) — do not drop them. ' +
-        'When a cell wraps across lines in the PDF, join with a single space — never use HTML ' +
-        '(no <br>, <br/>, or entities).',
+      'One inner array per printed table/billing row; cell[i] matches columns[i]. ' +
+        'Keep values exactly as printed (commas, decimals). Use "" for blank. Keep zero-amount rows. ' +
+        'Include section titles (Part Details, Labour Charges, Labour and Services, Spare Part Details, ' +
+        'Miscellaneous, Undefined Parts, etc.), Body & Paint / repair-group banners, and ' +
+        'unpriced detail rows (e.g. BODREP99 "- RIM REPLACE"). Include P and L marker cells. ' +
+        'Merge wrapped description lines into one cell with a space — never HTML (<br/>). ' +
+        'Do not omit rows. Do not stop early across pages.',
     ),
 });
 
@@ -33,29 +35,46 @@ export const LlamaWorkshopExtractSchema = z.object({
   invoiceNumber: z
     .string()
     .nullable()
-    .describe('Invoice, estimate, or job-card number if printed'),
+    .describe('Invoice, estimate, RO, or job-card number if printed'),
   vehicleNumber: z
     .string()
     .nullable()
     .describe(
-      'Vehicle registration / Regn. / Reg. No. if printed anywhere on the bill ' +
-        '(header, order block, or first table info row such as "Reg. No : JH-10CS-2856"). ' +
-        'Return the plate value only (e.g. JH-10CS-2856).',
+      'Vehicle registration / Regn. / Reg. No. / Veh. Reg. No. if printed ' +
+        '(header or info block). Return the plate value only (e.g. JH-10CS-2856 or CG04NK1946).',
+    ),
+  documentTitle: z
+    .string()
+    .nullable()
+    .describe(
+      'Printed document title if present (e.g. TEMPORARY ESTIMATE, Tax Invoice, ' +
+        'Supplementary Estimate, Quotation, Insurance Temporary Estimate).',
     ),
   lineItems: LlamaDynamicTableSchema.describe(
-    'ONE combined table of ALL line items from EVERY page of the PDF, in document order. ' +
-      'Include both spare-parts/material rows AND labour/service rows when they share the same ' +
-      'printed Lab/Part table (interleaved serial numbers are normal — do not skip either group). ' +
-      'Include unpriced detail/sub-description rows under a parent line. ' +
-      'Do not split into parts vs labour here. Do not omit rows. Do not stop early. ' +
-      'Skip only section title rows (Labour Charges / Part Charges), pure totals/grand-total ' +
-      'summary rows, and HSN tax-summary tables at the end. ' +
-      'Optional vehicle-info banner rows (Ste/Door/KMR/Reg. No.) may be included if present.',
+    'ONE combined table of ALL billing/line rows from EVERY page, in document order. ' +
+      'Include parts and labour/service rows (interleaved P/L or serials are normal). ' +
+      'Include section banners and repair-group banners. Include Misc / Undefined Parts rows. ' +
+      'Include "not included / excluded" estimate notes as rows if they appear in the table area. ' +
+      'Do not split parts vs labour here. Skip ONLY: terms & conditions, signatures, gate pass, ' +
+      'feedback forms, payment/parking policy blocks, and pure end-of-doc tax-summary grids that ' +
+      'are not line items.',
   ),
+  partsTotal: z
+    .number()
+    .nullable()
+    .describe(
+      'Document summary Parts total / Total Parts Amt / Final Parts Invoice Amount if printed; null if absent',
+    ),
+  labourTotal: z
+    .number()
+    .nullable()
+    .describe(
+      'Document summary Labour total / Total Labor Amt / Final Labour Invoice Amount if printed; null if absent',
+    ),
   grandTotal: z
     .number()
     .nullable()
-    .describe('Final payable / grand total / total invoice value if printed; null if absent'),
+    .describe('Final payable / grand total / Total Amount with Tax if printed; null if absent'),
 });
 
 export type LlamaWorkshopExtract = z.infer<typeof LlamaWorkshopExtractSchema>;
@@ -73,8 +92,11 @@ export const llamaWorkshopJsonSchema: Record<string, unknown> = rest;
     (llamaWorkshopJsonSchema as { type?: string }).type !== 'object' ||
     lineItems?.type !== 'object' ||
     !lineItems?.properties?.columns ||
-    !lineItems?.properties?.rows
+    !lineItems?.properties?.rows ||
+    !props?.partsTotal ||
+    !props?.labourTotal ||
+    !props?.documentTitle
   ) {
-    throw new Error('llamaWorkshopJsonSchema missing lineItems columns+rows object shape');
+    throw new Error('llamaWorkshopJsonSchema missing required workshop extract fields');
   }
 }
