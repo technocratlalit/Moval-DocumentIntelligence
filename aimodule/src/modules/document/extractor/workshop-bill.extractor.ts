@@ -47,6 +47,8 @@ import {
   expandLineItemsArrayRows,
   isArrayRowFormat,
   isLineItemsArrayFormat,
+  hasColumnShiftDescriptionIssues,
+  countStructurallyBadLineItemDescriptions,
 } from '../schema/workshop/workshop-bill.shared.js';
 
 export type WorkshopTableLayout = 'split' | 'sequential';
@@ -500,6 +502,16 @@ export class WorkshopBillExtractor {
       );
       isTruncated = true;
     }
+    if (!isTruncated && hasColumnShiftDescriptionIssues(initial.lineItems)) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Column-shift description issues on sequential chunk ${chunkIndex + 1}. Marking as truncated.`,
+        {
+          lineItems: initialRows,
+          badDescriptions: countStructurallyBadLineItemDescriptions(initial.lineItems),
+        },
+      );
+      isTruncated = true;
+    }
 
     if (!isTruncated) {
       return initial;
@@ -517,7 +529,12 @@ export class WorkshopBillExtractor {
             'sequential',
             proModel,
           ) as LeanSequentialChunkExtractResult;
-          if (proResult.lineItems.length > initialRows) {
+          const initialBad = countStructurallyBadLineItemDescriptions(initial.lineItems);
+          const proBad = countStructurallyBadLineItemDescriptions(proResult.lineItems);
+          if (
+            proResult.lineItems.length > initialRows ||
+            proBad < initialBad
+          ) {
             return proResult;
           }
         } catch (e) {
@@ -547,11 +564,16 @@ export class WorkshopBillExtractor {
       ) as LeanSequentialChunkExtractResult;
 
       const subRows = sub.lineItems.length;
-      if (this.hasConsecutiveSectionSerialGaps(sub.lineItems) || subRows >= 15) {
+      const subHasColumnShift = hasColumnShiftDescriptionIssues(sub.lineItems);
+      if (
+        this.hasConsecutiveSectionSerialGaps(sub.lineItems) ||
+        subHasColumnShift ||
+        subRows >= 15
+      ) {
         const proModel = _config.WORKSHOP_AI_MODEL;
         if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
           this.obs.warn(
-            `WorkshopBillExtractor: Sequential single-page run for page ${pageIndices[p]} appears truncated/long (${subRows} rows). Retrying page with Pro model (${proModel}).`,
+            `WorkshopBillExtractor: Sequential single-page run for page ${pageIndices[p]} appears truncated/long/shifted (${subRows} rows). Retrying page with Pro model (${proModel}).`,
           );
           try {
             const proSub = await this.runSingleLeanChunkExtract(
@@ -562,9 +584,11 @@ export class WorkshopBillExtractor {
               'sequential',
               proModel,
             ) as LeanSequentialChunkExtractResult;
-            if (proSub.lineItems.length > subRows) {
+            const subBad = countStructurallyBadLineItemDescriptions(sub.lineItems);
+            const proBad = countStructurallyBadLineItemDescriptions(proSub.lineItems);
+            if (proSub.lineItems.length > subRows || proBad < subBad) {
               this.obs.info(
-                `WorkshopBillExtractor: Sequential page ${pageIndices[p]} Pro model extraction successful — rows increased from ${subRows} to ${proSub.lineItems.length}.`,
+                `WorkshopBillExtractor: Sequential page ${pageIndices[p]} Pro model preferred — rows ${subRows}→${proSub.lineItems.length}, badDesc ${subBad}→${proBad}.`,
               );
               sub = proSub;
             }
@@ -639,6 +663,22 @@ export class WorkshopBillExtractor {
           `WorkshopBillExtractor: Consecutive section Sr.No gap after sequential merge — ` +
           `rows=${mergedLineItems.length}. Some table rows may be missing; flagging for human review.`,
           { totalRows: mergedLineItems.length, pageCount },
+        );
+        if (gateResult) {
+          gateResult = {
+            ...gateResult,
+            requiresHumanReview: true,
+            confidenceScore: Math.min(Number(gateResult.confidenceScore ?? 1), 0.75),
+          };
+        }
+      }
+
+      if (hasColumnShiftDescriptionIssues(mergedLineItems)) {
+        const badDescriptions = countStructurallyBadLineItemDescriptions(mergedLineItems);
+        this.obs.warn(
+          `WorkshopBillExtractor: Column-shift description issues after sequential merge — ` +
+          `badDesc=${badDescriptions}/${mergedLineItems.length}. Flagging for human review.`,
+          { badDescriptions, totalRows: mergedLineItems.length, pageCount },
         );
         if (gateResult) {
           gateResult = {

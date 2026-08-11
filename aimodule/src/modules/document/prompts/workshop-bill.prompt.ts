@@ -99,7 +99,9 @@ const TABLE_RULES = `
   6. Preserve printed Sr.No in s even when it continues across pages (e.g. s: 101).
   7. Eicher / narrow Sr.No column: 3-digit numbers (100+) may wrap in one cell ("12"+"6"=126).
      Always merge wrapped digits into s — never treat the second digit as part number.
-  8. HSN-WISE TAX SUMMARY TABLE — NEVER extract these rows as parts or labour.
+  8. Description = part/labour NAME text only. NEVER put Qty, Rate, UOM, or HSN into description.
+     If Part No and Description share one cell ("CODE / NAME"), put CODE in pn/lc and NAME in description.
+  9. HSN-WISE TAX SUMMARY TABLE — NEVER extract these rows as parts or labour.
      These appear AFTER the Grand Total / "Total Parts Cost" / "Total Labour Cost" footer as a
      separate table for GST filing purposes. Recognition signals (ALL of the below apply together):
      • Table columns are ONLY: SR.No | HSN/SAC Code | Taxable Amount | CGST Rate | CGST Amount |
@@ -299,7 +301,10 @@ const SEQUENTIAL_TABLE_RULES = `
   3. Multi-column bills (10–17+ cols): map known fields to positions 0–11; ALL unmapped cols → extra pairs at 13+.
   4. Numbers: strip ₹, Rs., commas → float/int as strings.
      Example: "5,934.74" / "1,23,456.78" → "5934.74" / "123456.78" — never take only the left of the comma.
-  5. STOP at Grand Total / SUMMARY block — do not extract HSN-wise tax summary rows.
+  5. Description (col[4]) = part/labour NAME text only. NEVER put Qty, Rate, UOM, or HSN into description.
+     If Part No and Description share one cell ("CODE / NAME"), put CODE in col[2] and NAME in col[4].
+     Continuation pages without headers keep the SAME column order — do not shift Qty into description.
+  6. STOP at Grand Total / SUMMARY block — do not extract HSN-wise tax summary rows.
   ${EDGE_CASES}
 `;
 

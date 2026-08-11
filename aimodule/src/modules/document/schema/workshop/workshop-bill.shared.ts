@@ -137,7 +137,7 @@ function expandExtraColumn(c: unknown): { key: unknown; value: unknown } {
 
 function expandPartsRow(row: unknown): Record<string, unknown> {
   const r = row as Record<string, unknown>;
-  return {
+  return salvageLineItemColumnShift({
     srNo: r.s ?? r.srNo,
     partNumber: r.pn ?? r.partNumber,
     hsnSac: r.h ?? r.hsnSac,
@@ -153,12 +153,12 @@ function expandPartsRow(row: unknown): Record<string, unknown> {
     extraColumns: Array.isArray(r.ec ?? r.extraColumns)
       ? ((r.ec ?? r.extraColumns) as unknown[]).map(expandExtraColumn)
       : [],
-  };
+  });
 }
 
 function expandLabourRow(row: unknown): Record<string, unknown> {
   const r = row as Record<string, unknown>;
-  return {
+  return salvageLineItemColumnShift({
     srNo: r.s ?? r.srNo,
     labourCode: r.lc ?? r.labourCode,
     hsnSac: r.h ?? r.hsnSac,
@@ -174,7 +174,7 @@ function expandLabourRow(row: unknown): Record<string, unknown> {
     extraColumns: Array.isArray(r.ec ?? r.extraColumns)
       ? ((r.ec ?? r.extraColumns) as unknown[]).map(expandExtraColumn)
       : [],
-  };
+  });
 }
 
 /** Expand compact Gemini output keys back to full Zod field names before validation. */
@@ -594,7 +594,7 @@ function expandPartsArrayRow(arr: unknown[]): Record<string, unknown> {
     }
   }
   row.extraColumns = extras;
-  return row;
+  return salvageLineItemColumnShift(row);
 }
 
 
@@ -631,7 +631,7 @@ function expandLabourArrayRow(arr: unknown[]): Record<string, unknown> {
     row.rowType = null;
   }
   row.extraColumns = [];
-  return row;
+  return salvageLineItemColumnShift(row);
 }
 
 
@@ -740,6 +740,121 @@ const LINE_ITEMS_NUMERIC_IDX = new Set([0, 6, 7, 8, 9, 10, 11]);
 const LINE_ITEMS_EXTRA_START = 13;
 const LINE_ITEMS_MAX_EXTRA_PAIRS = 8;
 
+const UOM_ONLY_DESCRIPTION = new Set([
+  'piece', 'pieces', 'pcs', 'pc', 'nos', 'no', 'meter', 'meters', 'mtr', 'mtrs',
+  'hrs', 'hr', 'hour', 'hours', 'set', 'kit', 'each', 'ea',
+]);
+
+function lineItemQty(row: Record<string, unknown>): number | null {
+  const raw = row.quantity ?? row.quantityOrHours;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function lineItemCodeField(row: Record<string, unknown>): { key: string; value: string } | null {
+  for (const key of ['itemCode', 'partNumber', 'labourCode'] as const) {
+    const value = String(row[key] ?? '').trim();
+    if (value) return { key, value };
+  }
+  return null;
+}
+
+/**
+ * Detect column-shift: description slot got qty/UOM/empty instead of part/labour name.
+ * Strict — good text descriptions never match.
+ */
+export function isStructurallyBadLineItemDescription(row: Record<string, unknown>): boolean {
+  const desc = String(row.description ?? '').trim();
+  if (!desc) return true;
+
+  const qty = lineItemQty(row);
+  if (/^\d+(\.\d+)?$/.test(desc) && qty !== null && Number(desc) === qty) {
+    return true;
+  }
+
+  if (UOM_ONLY_DESCRIPTION.has(desc.toLowerCase()) && qty !== null) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Free salvage when description is structurally bad.
+ * - Split "CODE / NAME" from code field into code + description
+ * - Recover taxAmount from extraColumns when taxAmount is 0/null
+ * Never rewrites rows with good descriptions.
+ */
+export function salvageLineItemColumnShift(row: Record<string, unknown>): Record<string, unknown> {
+  if (!isStructurallyBadLineItemDescription(row)) {
+    return salvageTaxAmountFromExtras(row);
+  }
+
+  let out: Record<string, unknown> = { ...row };
+  const codeField = lineItemCodeField(out);
+  if (codeField) {
+    const m = codeField.value.match(/^(.+?)\s*\/\s*(.+)$/);
+    if (m) {
+      const left = m[1].trim();
+      const right = m[2].trim();
+      if (left && right && !/^\d+(\.\d+)?$/.test(right)) {
+        out = { ...out, [codeField.key]: left, description: right };
+      }
+    }
+  }
+
+  return salvageTaxAmountFromExtras(out);
+}
+
+function salvageTaxAmountFromExtras(row: Record<string, unknown>): Record<string, unknown> {
+  const tax = row.taxAmount;
+  const taxNum = tax === null || tax === undefined || tax === '' ? 0 : Number(tax);
+  if (Number.isFinite(taxNum) && taxNum !== 0) return row;
+
+  const extras = Array.isArray(row.extraColumns) ? row.extraColumns : [];
+  const parseExtra = (raw: unknown): number | null => {
+    const col = raw as { key?: unknown; value?: unknown };
+    const key = String(col.key ?? '');
+    if (!/tax\s*amt|igst|cgst|sgst|gst/i.test(key)) return null;
+    if (/%|rate/i.test(key) && !/amt|amount/i.test(key)) return null;
+    const n = Number(String(col.value ?? '').replace(/,/g, '').trim());
+    return Number.isFinite(n) && n !== 0 ? n : null;
+  };
+
+  for (const raw of extras) {
+    const col = raw as { key?: unknown };
+    const key = String(col.key ?? '');
+    if (!/amt|amount/i.test(key)) continue;
+    const n = parseExtra(raw);
+    if (n !== null) return { ...row, taxAmount: n };
+  }
+  for (const raw of extras) {
+    const n = parseExtra(raw);
+    if (n !== null) return { ...row, taxAmount: n };
+  }
+  return row;
+}
+
+export function countStructurallyBadLineItemDescriptions(
+  rows: Record<string, unknown>[],
+): number {
+  let n = 0;
+  for (const row of rows) {
+    if (isStructurallyBadLineItemDescription(row)) n += 1;
+  }
+  return n;
+}
+
+/** True when enough rows show description column-shift to warrant retry / review. */
+export function hasColumnShiftDescriptionIssues(rows: Record<string, unknown>[]): boolean {
+  if (rows.length === 0) return false;
+  const badCount = countStructurallyBadLineItemDescriptions(rows);
+  if (badCount >= 3) return true;
+  if (rows.length >= 5 && badCount / rows.length >= 0.1) return true;
+  return false;
+}
+
 function parseLineItemExtraColumnPairs(fixed: unknown[]): { key: string; value: string | null }[] {
   const extras: { key: string; value: string | null }[] = [];
   const maxIdx = Math.min(
@@ -783,7 +898,7 @@ function expandLineItemArrayRow(arr: unknown[]): Record<string, unknown> {
   row.partsCost = rt === 'PART' ? total : null;
   row.labourCost = rt === 'LABOUR' ? total : null;
   row.extraColumns = parseLineItemExtraColumnPairs(fixed);
-  return row;
+  return salvageLineItemColumnShift(row);
 }
 
 export function expandLineItemsArrayRows(raw: Record<string, unknown>): Record<string, unknown> {
@@ -800,7 +915,9 @@ export function expandLineItemsArrayRows(raw: Record<string, unknown>): Record<s
         return (desc.length > 0 || code.length > 0) && (total > 0 || Number(row.taxableAmount ?? 0) > 0);
       });
   } else {
-    lineItemsTable = rawItems as Record<string, unknown>[];
+    lineItemsTable = (rawItems as Record<string, unknown>[]).map((row) =>
+      salvageLineItemColumnShift({ ...row }),
+    );
   }
 
   return {
