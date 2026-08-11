@@ -126,7 +126,11 @@ export class WorkshopBillExtractor {
     );
   }
 
-  /** Minimum rows expected for a chunk — first page often has letterhead + few rows. */
+  /**
+   * Minimum rows expected for a chunk.
+   * Dense OEM bills (BharatBenz/DICV) often have ~20+ rows on page 1 alone —
+   * thresholds must exceed that so early stop mid-chunk triggers page-by-page retry.
+   */
   private minRowsForChunk(
     pageIndices: number[],
     chunkIndex: number,
@@ -135,9 +139,11 @@ export class WorkshopBillExtractor {
     const pagesInChunk = pageIndices.length;
     const isFirstChunk = chunkIndex === 0 && pageIndices[0] === 1;
     const isLastChunk = pageIndices[pageIndices.length - 1] === totalPageCount;
-    if (isFirstChunk) return 3 + (pagesInChunk - 1) * 8;
+    // First: 2 pages → 34, 3 pages → 56 (page-1-only ~20 fails)
+    if (isFirstChunk) return 12 + (pagesInChunk - 1) * 22;
+    // Last chunk often totals/terms — keep soft
     if (isLastChunk) return Math.max(3, pagesInChunk * 5);
-    return pagesInChunk * 8;
+    return pagesInChunk * 22;
   }
 
   /** flash-lite can stop mid-chunk (~16 rows) without throwing — split and retry per page. */
@@ -182,6 +188,41 @@ export class WorkshopBillExtractor {
       const segMax = seg[seg.length - 1];
       if (segMax - segMin + 1 > seg.length) return true;
     }
+    return false;
+  }
+
+  /**
+   * Sequential layout: detect holes in printed Sr.No within the same rowType
+   * (e.g. PART 20 → 84). Ignores expected PART→LABOUR section restarts.
+   * Unlike hasSerialGapsForTable, does not split on large jumps — those ARE the bug.
+   */
+  private hasConsecutiveSectionSerialGaps(rows: Record<string, unknown>[]): boolean {
+    let prevType: string | null = null;
+    let prevSr: number | null = null;
+
+    for (const row of rows) {
+      const rt = String(row.rowType ?? '').trim().toUpperCase();
+      if (rt !== 'PART' && rt !== 'LABOUR') {
+        prevType = null;
+        prevSr = null;
+        continue;
+      }
+
+      const n = Number(row.srNo);
+      if (!Number.isFinite(n) || n <= 0) {
+        prevType = rt;
+        prevSr = null;
+        continue;
+      }
+
+      if (prevType === rt && prevSr !== null && n - prevSr > 1) {
+        return true;
+      }
+
+      prevType = rt;
+      prevSr = n;
+    }
+
     return false;
   }
 
@@ -452,6 +493,13 @@ export class WorkshopBillExtractor {
       );
       isTruncated = true;
     }
+    if (!isTruncated && this.hasConsecutiveSectionSerialGaps(initial.lineItems)) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Consecutive section Sr.No gap on sequential chunk ${chunkIndex + 1}. Marking as truncated.`,
+        { lineItems: initialRows },
+      );
+      isTruncated = true;
+    }
 
     if (!isTruncated) {
       return initial;
@@ -490,13 +538,41 @@ export class WorkshopBillExtractor {
     for (let p = 0; p < pageIndices.length; p++) {
       const singlePage = [pageIndices[p]];
       const pageIsFirst = isFirst && p === 0;
-      const sub = await this.runSingleLeanChunkExtract(
+      let sub = await this.runSingleLeanChunkExtract(
         inputData,
         singlePage,
         pageIsFirst,
         `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[p]}`,
         'sequential',
       ) as LeanSequentialChunkExtractResult;
+
+      const subRows = sub.lineItems.length;
+      if (this.hasConsecutiveSectionSerialGaps(sub.lineItems) || subRows >= 15) {
+        const proModel = _config.WORKSHOP_AI_MODEL;
+        if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+          this.obs.warn(
+            `WorkshopBillExtractor: Sequential single-page run for page ${pageIndices[p]} appears truncated/long (${subRows} rows). Retrying page with Pro model (${proModel}).`,
+          );
+          try {
+            const proSub = await this.runSingleLeanChunkExtract(
+              inputData,
+              singlePage,
+              pageIsFirst,
+              `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[p]}-PRO`,
+              'sequential',
+              proModel,
+            ) as LeanSequentialChunkExtractResult;
+            if (proSub.lineItems.length > subRows) {
+              this.obs.info(
+                `WorkshopBillExtractor: Sequential page ${pageIndices[p]} Pro model extraction successful — rows increased from ${subRows} to ${proSub.lineItems.length}.`,
+              );
+              sub = proSub;
+            }
+          } catch (e) {
+            this.obs.warn(`WorkshopBillExtractor: Sequential page ${pageIndices[p]} Pro model fallback failed`, { error: e });
+          }
+        }
+      }
 
       if (pageIsFirst) gateRaw = sub.raw;
       mergedLineItems.push(...sub.lineItems);
@@ -557,6 +633,21 @@ export class WorkshopBillExtractor {
       }
 
       const mergedLineItems = mergeLineItemsRows(allLineItems);
+
+      if (this.hasConsecutiveSectionSerialGaps(mergedLineItems)) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Consecutive section Sr.No gap after sequential merge — ` +
+          `rows=${mergedLineItems.length}. Some table rows may be missing; flagging for human review.`,
+          { totalRows: mergedLineItems.length, pageCount },
+        );
+        if (gateResult) {
+          gateResult = {
+            ...gateResult,
+            requiresHumanReview: true,
+            confidenceScore: Math.min(Number(gateResult.confidenceScore ?? 1), 0.75),
+          };
+        }
+      }
 
       return {
         ...(gateResult ?? {}),

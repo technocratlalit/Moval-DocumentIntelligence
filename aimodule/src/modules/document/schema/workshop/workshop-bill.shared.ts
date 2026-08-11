@@ -120,8 +120,8 @@ export const WorkshopDocumentGateSchema = z.object({
 /** Default when WORKSHOP_MULTIPASS_PAGE_THRESHOLD env is unset (see config.ts). */
 export const WORKSHOP_MULTIPASS_PAGE_THRESHOLD_DEFAULT = 15;
 
-/** Page-chunk size when single-pass hits output truncation (fallback only). */
-export const WORKSHOP_CHUNK_PAGE_SIZE = 3;
+/** Page-chunk size when single-pass hits output truncation (fallback only). Prefer _config.WORKSHOP_CHUNK_PAGE_SIZE. */
+export const WORKSHOP_CHUNK_PAGE_SIZE = 2;
 
 export { isGeminiTruncationError as isWorkshopTruncationError } from '../../../../utils/gemini-truncation.util.js';
 
