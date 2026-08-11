@@ -399,10 +399,7 @@ const LABOUR_NUMERIC_IDX = new Set([0, 4, 5, 6, 7, 8, 9, 10]);
 
 function coerceVal(v: unknown, isNumeric: boolean): unknown {
   if (v === undefined || v === null || v === '' || v === 'null') return null;
-  if (isNumeric) {
-    const n = parseFloat(String(v));
-    return Number.isFinite(n) ? n : null;
-  }
+  if (isNumeric) return preprocessWorkshopNumber(v);
   return String(v);
 }
 

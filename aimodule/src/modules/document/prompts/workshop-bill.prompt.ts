@@ -95,6 +95,7 @@ const TABLE_RULES = `
   3. Multi-column bills (10–17 cols): map known fields + put ALL remaining columns in ec[].
   4. Do NOT skip rows because the table is wide or s (Sr.No) is high (row 100+ is still valid data).
   5. Numbers: strip ₹, Rs., commas → float/int.
+     Example: "5,934.74" / "1,23,456.78" → "5934.74" / "123456.78" — never take only the left of the comma.
   6. Preserve printed Sr.No in s even when it continues across pages (e.g. s: 101).
   7. Eicher / narrow Sr.No column: 3-digit numbers (100+) may wrap in one cell ("12"+"6"=126).
      Always merge wrapped digits into s — never treat the second digit as part number.
@@ -297,6 +298,7 @@ const SEQUENTIAL_TABLE_RULES = `
   2. Preserve interleaved Part/Labour sequence exactly as printed — do NOT reorder by type.
   3. Multi-column bills (10–17+ cols): map known fields to positions 0–11; ALL unmapped cols → extra pairs at 13+.
   4. Numbers: strip ₹, Rs., commas → float/int as strings.
+     Example: "5,934.74" / "1,23,456.78" → "5934.74" / "123456.78" — never take only the left of the comma.
   5. STOP at Grand Total / SUMMARY block — do not extract HSN-wise tax summary rows.
   ${EDGE_CASES}
 `;
