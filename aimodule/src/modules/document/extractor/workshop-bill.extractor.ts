@@ -241,6 +241,136 @@ export class WorkshopBillExtractor {
     return max;
   }
 
+  /** Split line items into pageCount contiguous segments (document order). */
+  private partitionLineItemsByPageEstimate(
+    rows: Record<string, unknown>[],
+    pageCount: number,
+  ): Record<string, unknown>[][] {
+    if (pageCount <= 0) return [];
+    if (pageCount === 1) return [rows];
+    if (rows.length === 0) return Array.from({ length: pageCount }, () => []);
+
+    const base = Math.floor(rows.length / pageCount);
+    const rem = rows.length % pageCount;
+    const segments: Record<string, unknown>[][] = [];
+    let offset = 0;
+    for (let i = 0; i < pageCount; i++) {
+      // Prefer proportional sizes; last segment gets the remainder.
+      const size = i === pageCount - 1 ? base + rem : base;
+      segments.push(rows.slice(offset, offset + size));
+      offset += size;
+    }
+    return segments;
+  }
+
+  /**
+   * Decide which pages to re-extract vs keep from the initial multi-page pass.
+   * Indexes are positions into pageIndices (0..n-1).
+   */
+  private resolveSequentialPagesToRetry(params: {
+    pageIndices: number[];
+    initialRows: Record<string, unknown>[];
+    softTrunc: boolean;
+    serialGap: boolean;
+    colShift: boolean;
+  }): {
+    keepByPageIndex: Map<number, Record<string, unknown>[]>;
+    retryPageIndexes: number[];
+  } {
+    const { pageIndices, initialRows, softTrunc, serialGap, colShift } = params;
+    const n = pageIndices.length;
+    const keepByPageIndex = new Map<number, Record<string, unknown>[]>();
+    const retryPageIndexes: number[] = [];
+
+    const retryAll = () => {
+      keepByPageIndex.clear();
+      return {
+        keepByPageIndex,
+        retryPageIndexes: Array.from({ length: n }, (_, i) => i),
+      };
+    };
+
+    // Soft-trunc with continuous serials → early stop: keep initial as page 0, retry later pages.
+    if (softTrunc && !serialGap) {
+      keepByPageIndex.set(0, initialRows);
+      for (let i = 1; i < n; i++) retryPageIndexes.push(i);
+      return { keepByPageIndex, retryPageIndexes };
+    }
+
+    // Column-shift only → keep clean estimated page segments, retry dirty ones.
+    if (colShift && !softTrunc && !serialGap) {
+      const segments = this.partitionLineItemsByPageEstimate(initialRows, n);
+      for (let i = 0; i < n; i++) {
+        const seg = segments[i] ?? [];
+        const segBad =
+          hasColumnShiftDescriptionIssues(seg) ||
+          (seg.length >= 3 && countStructurallyBadLineItemDescriptions(seg) >= 1);
+        if (segBad) {
+          retryPageIndexes.push(i);
+        } else {
+          keepByPageIndex.set(i, seg);
+        }
+      }
+      if (retryPageIndexes.length === 0) return retryAll();
+      return { keepByPageIndex, retryPageIndexes };
+    }
+
+    // Serial gaps or soft-trunc+gaps — cannot localize safely.
+    return retryAll();
+  }
+
+  private async runSequentialSinglePageWithOptionalPro(
+    inputData: unknown,
+    pageNum: number,
+    pageIsFirst: boolean,
+    chunkIndex: number,
+  ): Promise<LeanSequentialChunkExtractResult> {
+    let sub = await this.runSingleLeanChunkExtract(
+      inputData,
+      [pageNum],
+      pageIsFirst,
+      `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageNum}`,
+      'sequential',
+    ) as LeanSequentialChunkExtractResult;
+
+    const subRows = sub.lineItems.length;
+    const subHasColumnShift = hasColumnShiftDescriptionIssues(sub.lineItems);
+    if (
+      this.hasConsecutiveSectionSerialGaps(sub.lineItems) ||
+      subHasColumnShift ||
+      subRows >= 15
+    ) {
+      const proModel = _config.WORKSHOP_AI_MODEL;
+      if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Sequential single-page run for page ${pageNum} appears truncated/long/shifted (${subRows} rows). Retrying page with Pro model (${proModel}).`,
+        );
+        try {
+          const proSub = await this.runSingleLeanChunkExtract(
+            inputData,
+            [pageNum],
+            pageIsFirst,
+            `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageNum}-PRO`,
+            'sequential',
+            proModel,
+          ) as LeanSequentialChunkExtractResult;
+          const subBad = countStructurallyBadLineItemDescriptions(sub.lineItems);
+          const proBad = countStructurallyBadLineItemDescriptions(proSub.lineItems);
+          if (proSub.lineItems.length > subRows || proBad < subBad) {
+            this.obs.info(
+              `WorkshopBillExtractor: Sequential page ${pageNum} Pro model preferred — rows ${subRows}→${proSub.lineItems.length}, badDesc ${subBad}→${proBad}.`,
+            );
+            sub = proSub;
+          }
+        } catch (e) {
+          this.obs.warn(`WorkshopBillExtractor: Sequential page ${pageNum} Pro model fallback failed`, { error: e });
+        }
+      }
+    }
+
+    return sub;
+  }
+
   private async runSingleLeanChunkExtract(
     inputData: unknown,
     pageIndices: number[],
@@ -420,11 +550,31 @@ export class WorkshopBillExtractor {
       { pageIndices, initialRows },
     );
 
+    const splitSoftTrunc = this.isChunkSoftTruncated(
+      initialRows,
+      pageIndices,
+      chunkIndex,
+      totalPageCount,
+    );
+    const splitSerialGap = this.hasSerialGaps(splitInitial.parts, splitInitial.labour);
+    // Early-stop: continuous serials + soft trunc → keep initial as first page, only extract later pages.
+    const splitEarlyStop = splitSoftTrunc && !splitSerialGap;
+
     const mergedParts: Record<string, unknown>[] = [];
     const mergedLabour: Record<string, unknown>[] = [];
     let gateRaw = splitInitial.raw;
 
-    for (let p = 0; p < pageIndices.length; p++) {
+    if (splitEarlyStop) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Split chunk ${chunkIndex + 1} early-stop — keeping initial rows as page ${pageIndices[0]}, re-extracting later page(s).`,
+        { pageIndices, initialRows },
+      );
+      mergedParts.push(...splitInitial.parts);
+      mergedLabour.push(...splitInitial.labour);
+    }
+
+    const startIdx = splitEarlyStop ? 1 : 0;
+    for (let p = startIdx; p < pageIndices.length; p++) {
       const singlePage = [pageIndices[p]];
       const pageIsFirst = isFirst && p === 0;
       let sub = await this.runSingleLeanChunkExtract(
@@ -471,6 +621,63 @@ export class WorkshopBillExtractor {
       resequenceTableSerials(sub.labour, this.maxSerialFromRows(mergedLabour));
       mergedParts.push(...sub.parts);
       mergedLabour.push(...sub.labour);
+    }
+
+    // Early-stop fallback: if still short or gapped, also re-extract first page.
+    if (splitEarlyStop) {
+      const mergedCount = mergedParts.length + mergedLabour.length;
+      const stillShort = this.isChunkSoftTruncated(
+        mergedCount,
+        pageIndices,
+        chunkIndex,
+        totalPageCount,
+      );
+      const stillGapped = this.hasSerialGaps(mergedParts, mergedLabour);
+      if (stillShort || stillGapped) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Split chunk ${chunkIndex + 1} early-stop fallback — re-extracting page ${pageIndices[0]}.`,
+        );
+        const pageIsFirst = isFirst;
+        let sub = await this.runSingleLeanChunkExtract(
+          inputData,
+          [pageIndices[0]],
+          pageIsFirst,
+          `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[0]}-FALLBACK`,
+          'split',
+        ) as LeanChunkExtractResult;
+        const subRows = sub.parts.length + sub.labour.length;
+        if (this.hasSerialGaps(sub.parts, sub.labour) || subRows >= 15) {
+          const proModel = _config.WORKSHOP_AI_MODEL;
+          if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+            try {
+              const proSub = await this.runSingleLeanChunkExtract(
+                inputData,
+                [pageIndices[0]],
+                pageIsFirst,
+                `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[0]}-FALLBACK-PRO`,
+                'split',
+                proModel,
+              ) as LeanChunkExtractResult;
+              if (proSub.parts.length + proSub.labour.length > subRows) {
+                sub = proSub;
+              }
+            } catch (e) {
+              this.obs.warn(`WorkshopBillExtractor: Page ${pageIndices[0]} fallback Pro failed`, { error: e });
+            }
+          }
+        }
+        if (pageIsFirst) gateRaw = sub.raw;
+        const restParts = mergedParts.slice(splitInitial.parts.length);
+        const restLabour = mergedLabour.slice(splitInitial.labour.length);
+        resequenceTableSerials(sub.parts, 0);
+        resequenceTableSerials(sub.labour, 0);
+        resequenceTableSerials(restParts, this.maxSerialFromRows(sub.parts));
+        resequenceTableSerials(restLabour, this.maxSerialFromRows(sub.labour));
+        mergedParts.length = 0;
+        mergedLabour.length = 0;
+        mergedParts.push(...sub.parts, ...restParts);
+        mergedLabour.push(...sub.labour, ...restLabour);
+      }
     }
 
     return { raw: gateRaw, parts: mergedParts, labour: mergedLabour };
@@ -544,62 +751,105 @@ export class WorkshopBillExtractor {
       return initial;
     }
 
+    const softTrunc = this.isChunkSoftTruncated(initialRows, pageIndices, chunkIndex, totalPageCount);
+    const serialGap =
+      this.hasSerialGapsForTable(initial.lineItems) ||
+      this.hasConsecutiveSectionSerialGaps(initial.lineItems);
+    const colShift = hasColumnShiftDescriptionIssues(initial.lineItems);
+
+    const { keepByPageIndex, retryPageIndexes } = this.resolveSequentialPagesToRetry({
+      pageIndices,
+      initialRows: initial.lineItems,
+      softTrunc,
+      serialGap,
+      colShift,
+    });
+
     this.obs.warn(
-      `WorkshopBillExtractor: Sequential chunk ${chunkIndex + 1} soft-truncated (${initialRows} rows) — retrying page-by-page.`,
-      { pageIndices, initialRows },
+      `WorkshopBillExtractor: Sequential chunk ${chunkIndex + 1} needs retry — ` +
+      `softTrunc=${softTrunc}, serialGap=${serialGap}, colShift=${colShift}; ` +
+      `keeping ${keepByPageIndex.size} page(s), re-extracting ${retryPageIndexes.length} page(s).`,
+      {
+        pageIndices,
+        initialRows,
+        keepPages: [...keepByPageIndex.keys()].map((i) => pageIndices[i]),
+        retryPages: retryPageIndexes.map((i) => pageIndices[i]),
+      },
     );
 
-    const mergedLineItems: Record<string, unknown>[] = [];
+    const pageSlots: (Record<string, unknown>[] | null)[] = pageIndices.map((_, i) =>
+      keepByPageIndex.has(i) ? (keepByPageIndex.get(i) as Record<string, unknown>[]) : null,
+    );
+    const freshlyExtracted = new Set<number>();
     let gateRaw = initial.raw;
 
-    for (let p = 0; p < pageIndices.length; p++) {
-      const singlePage = [pageIndices[p]];
-      const pageIsFirst = isFirst && p === 0;
-      let sub = await this.runSingleLeanChunkExtract(
+    const extractSlot = async (i: number) => {
+      const pageNum = pageIndices[i];
+      const pageIsFirst = isFirst && i === 0;
+      const sub = await this.runSequentialSinglePageWithOptionalPro(
         inputData,
-        singlePage,
+        pageNum,
         pageIsFirst,
-        `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[p]}`,
-        'sequential',
-      ) as LeanSequentialChunkExtractResult;
+        chunkIndex,
+      );
+      pageSlots[i] = sub.lineItems;
+      freshlyExtracted.add(i);
+      if (pageIsFirst) gateRaw = sub.raw;
+    };
 
-      const subRows = sub.lineItems.length;
-      const subHasColumnShift = hasColumnShiftDescriptionIssues(sub.lineItems);
-      if (
-        this.hasConsecutiveSectionSerialGaps(sub.lineItems) ||
-        subHasColumnShift ||
-        subRows >= 15
-      ) {
-        const proModel = _config.WORKSHOP_AI_MODEL;
-        if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
-          this.obs.warn(
-            `WorkshopBillExtractor: Sequential single-page run for page ${pageIndices[p]} appears truncated/long/shifted (${subRows} rows). Retrying page with Pro model (${proModel}).`,
-          );
-          try {
-            const proSub = await this.runSingleLeanChunkExtract(
-              inputData,
-              singlePage,
-              pageIsFirst,
-              `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[p]}-PRO`,
-              'sequential',
-              proModel,
-            ) as LeanSequentialChunkExtractResult;
-            const subBad = countStructurallyBadLineItemDescriptions(sub.lineItems);
-            const proBad = countStructurallyBadLineItemDescriptions(proSub.lineItems);
-            if (proSub.lineItems.length > subRows || proBad < subBad) {
-              this.obs.info(
-                `WorkshopBillExtractor: Sequential page ${pageIndices[p]} Pro model preferred — rows ${subRows}→${proSub.lineItems.length}, badDesc ${subBad}→${proBad}.`,
-              );
-              sub = proSub;
-            }
-          } catch (e) {
-            this.obs.warn(`WorkshopBillExtractor: Sequential page ${pageIndices[p]} Pro model fallback failed`, { error: e });
-          }
+    for (const i of retryPageIndexes) {
+      await extractSlot(i);
+    }
+
+    for (let i = 0; i < pageSlots.length; i++) {
+      if (pageSlots[i] === null) {
+        await extractSlot(i);
+      }
+    }
+
+    let mergedLineItems = pageSlots.flatMap((slot) => slot ?? []);
+
+    // Mixed / incomplete: after early-stop append, fix remaining column-shift or still-short output.
+    const stillSoft = this.isChunkSoftTruncated(
+      mergedLineItems.length,
+      pageIndices,
+      chunkIndex,
+      totalPageCount,
+    );
+    const stillGap =
+      this.hasSerialGapsForTable(mergedLineItems) ||
+      this.hasConsecutiveSectionSerialGaps(mergedLineItems);
+    const stillColShift = hasColumnShiftDescriptionIssues(mergedLineItems);
+
+    if (stillSoft || stillGap || stillColShift) {
+      const fallbackRetry = new Set<number>();
+
+      if (stillSoft || stillGap) {
+        for (let i = 0; i < pageIndices.length; i++) {
+          if (!freshlyExtracted.has(i)) fallbackRetry.add(i);
         }
       }
 
-      if (pageIsFirst) gateRaw = sub.raw;
-      mergedLineItems.push(...sub.lineItems);
+      if (stillColShift) {
+        const segments = this.partitionLineItemsByPageEstimate(mergedLineItems, pageIndices.length);
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i] ?? [];
+          const segBad =
+            hasColumnShiftDescriptionIssues(seg) ||
+            (seg.length >= 3 && countStructurallyBadLineItemDescriptions(seg) >= 1);
+          if (segBad) fallbackRetry.add(i);
+        }
+      }
+
+      if (fallbackRetry.size > 0) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Sequential chunk ${chunkIndex + 1} post-surgical fallback — re-extracting pages ${[...fallbackRetry].map((i) => pageIndices[i]).join(',')}.`,
+        );
+        for (const i of fallbackRetry) {
+          await extractSlot(i);
+        }
+        mergedLineItems = pageSlots.flatMap((slot) => slot ?? []);
+      }
     }
 
     return { raw: gateRaw, lineItems: mergedLineItems };
