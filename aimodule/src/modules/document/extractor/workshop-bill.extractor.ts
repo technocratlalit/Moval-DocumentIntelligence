@@ -1,854 +1,1156 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import axios from 'axios';
-import LlamaCloud from '@llamaindex/llama-cloud';
-import { _config } from '../../../config/config.js';
-import { ApiError } from '../../../shared/errors/apiError.js';
+import { ZodError } from 'zod';
+import { AIService } from '../../../infrastructure/ai/ai.service';
+import { UnrecoverableDocumentError } from '../../../shared/errors/document.errors.js';
+import { WorkshopBillSchema } from '../schema/workshop/workshop-bill.schema';
 import {
-  emptyDynamicTable,
-  parseDynamicTable,
-  type DynamicTable,
+  WorkshopChunkArraySchema,
+  WorkshopChunkArraySequentialSchema,
+  WorkshopLeanArraySchema,
+  WorkshopLeanArraySequentialSchema,
+} from '../schema/workshop/workshop-bill.gemini.schema';
+import {
+  getWorkshopChunkArrayPrompt,
+  getWorkshopLeanArrayFirstChunkPrompt,
+} from '../prompts/workshop-bill.prompt';
+import {
+  normaliseGst,
+  computeGrandTotalCheck,
+  classifyBillType,
+  extractVehicleState,
+  normaliseVehicleNo,
+  resolveSummaryPartsLabour,
+  mergeWorkshopTableRows,
+  mergeLineItemsRows,
+  resequenceTableSerials,
+  assignTableRowIndexes,
+} from '../utils/workshop/workshop-bill.utils';
+import {
+  buildPageChunks,
+  buildSliceInput,
+} from '../utils/workshop/workshop-pdf-slice.util.js';
+import { ObserverService } from '../../../infrastructure/observabllity/observer.service.js';
+import {
+  enforceDocumentTypeGates,
+  isEffectivelyEmpty,
+  rejectWrongTypeOrUnreadable,
+} from '../utils/document-gates.util.js';
+import {
+  getQualityHintFromInput,
+  mergeDocumentQuality,
+} from '../utils/document-quality.util.js';
+import { _config } from '../../../config/config';
+import { computeWorkshopMaxTokens } from '../../../cost/token-budget.js';
+import { resolveDocumentPageCount } from '../../../utils/document-page-count.util.js';
+import {
+  expandWorkshopShortKeys,
+  expandWorkshopArrayRows,
+  expandLineItemsArrayRows,
+  isArrayRowFormat,
+  isLineItemsArrayFormat,
+  hasColumnShiftDescriptionIssues,
+  countStructurallyBadLineItemDescriptions,
 } from '../schema/workshop/workshop-bill.shared.js';
-import { llamaWorkshopJsonSchema } from '../schema/workshop/workshop-bill.llamaparse.schema.js';
 
-const POLL_TIMEOUT_MS = 10 * 60 * 1000;
-const EXTRACT_TIER = 'agentic_plus' as const;
-const TOTAL_TOLERANCE = 1.5; // rupees — rounding / missing rows
+export type WorkshopTableLayout = 'split' | 'sequential';
 
-const REG_NO_RE =
-  /\b(?:Reg\.?\s*No\.?|Regn\.?|Registration|Veh\.?\s*Reg\.?\s*No\.?)\s*[:.]?\s*([A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{0,3}[-\s]?\d{1,4})\b/i;
+export interface WorkshopExtractOptions {
+  tableLayout?: WorkshopTableLayout;
+}
 
-const TOTALS_ROW_RE =
-  /^(grand\s*)?total|net\s*amount|amount\s*in\s*words|total\s*amount|total\s*tax|taxable\s*amt/i;
+type WorkshopRawResult = Record<string, unknown>;
 
-const NOTE_RE = /\b(not\s+included|excluded|after\s+dismantle|to\s+be\s+shared\s+later)\b/i;
-
-const NON_BILLING_RE =
-  /terms\s*&?\s*conditions|customer\s*signature|authorized\s*signat|gate\s*pass|feedback\s*form|delivery\s*policy|parking\s*charge/i;
-
-type ExtractConfigurationDataSchema = {
-  [key: string]: { [key: string]: unknown } | Array<unknown> | string | number | boolean | null;
+type LeanChunkExtractResult = {
+  raw: WorkshopRawResult;
+  parts: Record<string, unknown>[];
+  labour: Record<string, unknown>[];
 };
 
-type SectionKind = 'PART' | 'LABOUR' | 'MISC' | 'UNDEFINED';
-
-export type RepairGroup = {
-  id: string;
-  title: string;
-  members: Array<{ bucket: 'parts' | 'labour'; index: number }>;
+type LeanSequentialChunkExtractResult = {
+  raw: WorkshopRawResult;
+  lineItems: Record<string, unknown>[];
 };
-
-export type RepairEstimate = {
-  partNo: string | null;
-  description: string | null;
-  demandType: string | null;
-  components: { rr: number | null; denting: number | null; painting: number | null };
-  total: number | null;
-  row: string[];
-};
-
-async function downloadPdfToTemp(url: string): Promise<string> {
-  const timeoutMs = _config.PDF_DOWNLOAD_TIMEOUT_MS ?? 90_000;
-  const response = await axios.get(url, {
-    responseType: 'stream',
-    maxContentLength: 50 * 1024 * 1024,
-    timeout: timeoutMs,
-  });
-
-  const contentType = String(response.headers['content-type'] ?? '').toLowerCase();
-  if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-    throw ApiError.badRequest(`Expected a PDF URL, got content-type: ${contentType}`);
-  }
-
-  const tmpPath = path.join(
-    os.tmpdir(),
-    `llama-workshop-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`,
-  );
-  await new Promise<void>((resolve, reject) => {
-    const out = fs.createWriteStream(tmpPath);
-    response.data.pipe(out);
-    out.on('finish', () => resolve());
-    out.on('error', reject);
-    response.data.on('error', reject);
-  });
-  return tmpPath;
-}
-
-function cleanCell(v: unknown): string {
-  return String(v ?? '')
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/\\&/g, '&')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function asNullableString(v: unknown): string | null {
-  if (v == null) return null;
-  const s = cleanCell(v);
-  return s === '' ? null : s;
-}
-
-function asNullableNumber(v: unknown): number | null {
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  if (typeof v === 'string') {
-    const n = parseFloat(v.replace(/[^0-9.-]+/g, ''));
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-export function normalizeHsn(raw: string): string {
-  return String(raw ?? '').replace(/[^\d]/g, '');
-}
-
-function isServiceHsn(hsn: string): boolean {
-  return hsn.startsWith('9987');
-}
-
-function findColumnIndex(columns: string[], ...needles: string[]): number {
-  const lower = columns.map((c) => c.toLowerCase());
-  for (const needle of needles) {
-    const n = needle.toLowerCase();
-    const i = lower.findIndex((c) => c.includes(n));
-    if (i >= 0) return i;
-  }
-  return -1;
-}
-
-function findExplicitPlColumnIndex(columns: string[]): number {
-  for (let i = 0; i < columns.length; i++) {
-    const norm = columns[i].replace(/\s+/g, '').toUpperCase();
-    if (norm === 'P/L' || norm === 'P-L' || norm === 'PL' || norm === 'P|L') return i;
-  }
-  return -1;
-}
-
-function findTypeColumnIndex(columns: string[]): number {
-  return columns.findIndex((c) => /^type$/i.test(c.trim()));
-}
-
-function cellLooksNumeric(s: string): boolean {
-  if (!s) return false;
-  return /[\d]/.test(s.replace(/[,.\s%-]/g, ''));
-}
-
-function rowBannerText(row: string[]): string {
-  return row.filter((c) => c.trim()).join(' ').trim();
-}
-
-function normalizeTable(raw: unknown): DynamicTable {
-  const table = parseDynamicTable(raw);
-  const hsnIdx = findColumnIndex(table.columns, 'hsn/sac', 'hsn', 'sac');
-  return {
-    ...table,
-    columns: table.columns.map(cleanCell),
-    rows: table.rows.map((row) =>
-      row.map((cell, i) => {
-        const cleaned = cleanCell(cell);
-        if (i === hsnIdx && cleaned) {
-          const digits = normalizeHsn(cleaned);
-          return digits || cleaned;
-        }
-        return cleaned;
-      }),
-    ),
-  };
-}
-
-function detectSection(text: string): SectionKind | null {
-  const t = text
-    .replace(/[:.\-–—]+$/g, '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-  if (!t) return null;
-  if (/^undefined\s+parts?$/.test(t)) return 'UNDEFINED';
-  if (/^miscellaneous$|^misc\.?$/.test(t)) return 'MISC';
-  if (
-    /^(spare\s+)?parts?(\s+(details?|charges?|invoice|bill))?$/.test(t) ||
-    /^part\s+(details?|charges?|invoice)$/.test(t)
-  ) {
-    return 'PART';
-  }
-  if (
-    /^(labour|labor)(\s+(details?|charges?|invoice))?$/.test(t) ||
-    /^(labour|labor)\s+and\s+services$/.test(t)
-  ) {
-    return 'LABOUR';
-  }
-  return null;
-}
-
-function isRepairGroupBanner(row: string[], hsnIdx: number, plIdx: number, amountIdxs: number[]): boolean {
-  const joined = rowBannerText(row);
-  if (!joined) return false;
-  if (/\(body\s*&\s*paint/i.test(joined)) return true;
-
-  const marker = plIdx >= 0 ? (row[plIdx] ?? '').trim().toUpperCase() : '';
-  if (marker === 'P' || marker === 'L') return false;
-  const hsn = hsnIdx >= 0 ? normalizeHsn(row[hsnIdx] ?? '') : '';
-  if (hsn.length >= 4) return false;
-  if (amountIdxs.some((i) => cellLooksNumeric(row[i] ?? ''))) return false;
-
-  const nonEmpty = row.filter((c) => c.trim());
-  if (nonEmpty.length === 1 && nonEmpty[0].length >= 4 && !/^\d+$/.test(nonEmpty[0])) {
-    if (/change|repair|paint|fitting|opening|dent|bumper|fender|hood|door/i.test(nonEmpty[0])) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function isTotalsOrJunkRow(row: string[]): boolean {
-  const joined = rowBannerText(row);
-  if (!joined) return true;
-  if (TOTALS_ROW_RE.test(joined)) return true;
-  if (NON_BILLING_RE.test(joined)) return true;
-  return false;
-}
-
-function extractRegNoFromRows(rows: string[][]): string | null {
-  for (const row of rows) {
-    for (const cell of row) {
-      const m = cell.match(REG_NO_RE);
-      if (m?.[1]) return cleanCell(m[1].replace(/\s+/g, '').toUpperCase());
-    }
-  }
-  return null;
-}
-
-function isVehicleInfoRow(row: string[]): boolean {
-  const nonEmpty = row.filter((c) => c.trim());
-  return nonEmpty.length <= 2 && nonEmpty.some((c) => REG_NO_RE.test(c));
-}
-
-function hasLineItemText(row: string[], codeIdx: number, descIdx: number): boolean {
-  const code = codeIdx >= 0 ? (row[codeIdx] ?? '').trim() : '';
-  const desc = descIdx >= 0 ? (row[descIdx] ?? '').trim() : '';
-  if (code || desc) return true;
-  return row.some((c) => c.trim());
-}
-
-function isContinuationRow(
-  row: string[],
-  hsnIdx: number,
-  amountIdxs: number[],
-  codeIdx: number,
-  descIdx: number,
-): boolean {
-  const hsn = hsnIdx >= 0 ? normalizeHsn(row[hsnIdx] ?? '') : '';
-  if (hsn.length >= 4) return false;
-  if (amountIdxs.some((i) => cellLooksNumeric(row[i] ?? ''))) return false;
-  return hasLineItemText(row, codeIdx, descIdx);
-}
-
-function typeColumnIsLabour(value: string): boolean | null {
-  const v = value.trim().toLowerCase();
-  if (!v) return null;
-  if (/^l(abou?r)?$/.test(v) || v === 'service' || v === 'labour' || v === 'labor') return true;
-  if (/^p(art)?s?$/.test(v) || v === 'part' || v === 'parts') return false;
-  return null;
-}
-
-function hasPricedOrMarkedLine(
-  row: string[],
-  hsnIdx: number,
-  plIdx: number,
-  amountIdxs: number[],
-): boolean {
-  const marker = plIdx >= 0 ? (row[plIdx] ?? '').trim().toUpperCase() : '';
-  if (marker === 'P' || marker === 'L') return true;
-  const hsn = hsnIdx >= 0 ? normalizeHsn(row[hsnIdx] ?? '') : '';
-  if (hsn.length >= 4) return true;
-  return amountIdxs.some((i) => cellLooksNumeric(row[i] ?? ''));
-}
-
-function amountColumnIndexes(columns: string[]): number[] {
-  return [
-    findColumnIndex(columns, 'taxable'),
-    findColumnIndex(columns, 'unit price'),
-    findColumnIndex(columns, 'unit rate'),
-    findColumnIndex(columns, 'labour/part price'),
-    findColumnIndex(columns, 'total amt'),
-    findColumnIndex(columns, 'total amount'),
-    findColumnIndex(columns, 'net amt'),
-    findColumnIndex(columns, 'total'),
-    findColumnIndex(columns, 'amount'),
-    findColumnIndex(columns, 'mrp'),
-    findColumnIndex(columns, 'rate'),
-  ].filter((i) => i >= 0);
-}
-
-/** Prefer rightmost money-like column for sum reconciliation */
-function primaryAmountIndex(columns: string[]): number {
-  const preferred = [
-    findColumnIndex(columns, 'total amt'),
-    findColumnIndex(columns, 'total amount'),
-    findColumnIndex(columns, 'labour/part price'),
-    findColumnIndex(columns, 'taxable'),
-    findColumnIndex(columns, 'total'),
-    findColumnIndex(columns, 'amount'),
-  ].filter((i) => i >= 0);
-  return preferred.length ? preferred[0] : -1;
-}
-
-function sumTableAmount(table: DynamicTable): number {
-  const idx = primaryAmountIndex(table.columns);
-  if (idx < 0) return 0;
-  let sum = 0;
-  for (const row of table.rows) {
-    const n = asNullableNumber(row[idx]);
-    if (n != null) sum += n;
-  }
-  return sum;
-}
-
-export function inferDocumentType(title: string | null): string | null {
-  if (!title) return null;
-  const t = title.toLowerCase();
-  if (/supplementary/.test(t)) return 'SUPPLEMENTARY_ESTIMATE';
-  if (/temporary\s*estimate/.test(t)) return 'TEMPORARY_ESTIMATE';
-  if (/pre[-\s]?invoice/.test(t)) return 'PRE_INVOICE';
-  if (/tax\s*invoice|invoice/.test(t)) return 'TAX_INVOICE';
-  if (/quotation|quote/.test(t)) return 'QUOTATION';
-  if (/estimate/.test(t)) return 'ESTIMATE';
-  return null;
-}
-
-export function inferServiceHint(description: string): string {
-  const d = description.toLowerCase();
-  if (/paint/.test(d)) return 'PAINTING';
-  if (/dent/.test(d)) return 'DENTING';
-  if (/r\s*&\s*r|removal|refit|r&r/.test(d)) return 'R_AND_R';
-  if (/tow/.test(d)) return 'TOWING';
-  if (/\bac\b|refrigerant|gas\s*charg/.test(d)) return 'AC_SERVICE';
-  if (/glass|windshield|windscreen/.test(d)) return 'GLASS_FITTING';
-  if (/align/.test(d)) return 'ALIGNMENT';
-  if (/electric/.test(d)) return 'ELECTRICAL';
-  if (/mechanic|engine|gear\s*box/.test(d)) return 'MECHANICAL';
-  if (/body\s*repair|bodrep/.test(d)) return 'BODY_REPAIR';
-  if (/inspect|diagnos/.test(d)) return 'DIAGNOSTIC';
-  return 'OTHER';
-}
-
-export function isInsuranceCompositeSchema(columns: string[]): boolean {
-  const joined = columns.join(' | ').toLowerCase();
-  const hasRr = /r\s*&\s*r|r\s*and\s*r|r&r\s*cost|r&r\s*hrs/.test(joined);
-  const hasDent = /denting/.test(joined);
-  const hasPaint = /painting/.test(joined);
-  return hasRr && (hasDent || hasPaint);
-}
-
-function parseCompositeRow(row: string[], columns: string[]): RepairEstimate {
-  const codeIdx = findColumnIndex(columns, 'part no', 'part number', 'code');
-  const descIdx = findColumnIndex(columns, 'description', 'part description', 'particular');
-  const demandIdx = findColumnIndex(columns, 'demand type');
-  const rrIdx = findColumnIndex(columns, 'r&r cost', 'r & r cost', 'r and r cost', 'r&r');
-  const dentIdx = findColumnIndex(columns, 'denting');
-  const paintIdx = findColumnIndex(columns, 'painting');
-  const totalIdx = findColumnIndex(columns, 'total');
-  return {
-    partNo: codeIdx >= 0 ? asNullableString(row[codeIdx]) : null,
-    description: descIdx >= 0 ? asNullableString(row[descIdx]) : asNullableString(rowBannerText(row)),
-    demandType: demandIdx >= 0 ? asNullableString(row[demandIdx]) : null,
-    components: {
-      rr: rrIdx >= 0 ? asNullableNumber(row[rrIdx]) : null,
-      denting: dentIdx >= 0 ? asNullableNumber(row[dentIdx]) : null,
-      painting: paintIdx >= 0 ? asNullableNumber(row[paintIdx]) : null,
-    },
-    total: totalIdx >= 0 ? asNullableNumber(row[totalIdx]) : null,
-    row: [...row],
-  };
-}
-
-export type ProcessLineItemsResult = {
-  parts: DynamicTable;
-  labour: DynamicTable;
-  misc: DynamicTable;
-  undefinedParts: DynamicTable;
-  repairGroups: RepairGroup[];
-  repairEstimates: RepairEstimate[];
-  notes: string[];
-  labourServiceHints: string[];
-  vehicleFromRows: string | null;
-};
-
-/**
- * Classify lineItems → parts/labour (+ misc/undefined), repair groups, notes, Maruti composites.
- * Priority: P/L → section → Type → HSN 9987 → continuation inherit only.
- */
-export function processLineItems(lineItems: DynamicTable): ProcessLineItemsResult {
-  const columns = lineItems.columns;
-  const empty = emptyDynamicTable();
-  if (!columns.length) {
-    return {
-      parts: empty,
-      labour: empty,
-      misc: empty,
-      undefinedParts: empty,
-      repairGroups: [],
-      repairEstimates: [],
-      notes: [],
-      labourServiceHints: [],
-      vehicleFromRows: null,
-    };
-  }
-
-  // Maruti insurance composite — one physical row = part + services
-  if (isInsuranceCompositeSchema(columns)) {
-    const estimates: RepairEstimate[] = [];
-    const notes: string[] = [];
-    for (const row of lineItems.rows) {
-      const banner = rowBannerText(row);
-      if (!banner) continue;
-      if (NOTE_RE.test(banner) && !amountColumnIndexes(columns).some((i) => cellLooksNumeric(row[i] ?? ''))) {
-        notes.push(banner);
-        continue;
-      }
-      if (detectSection(banner) || isTotalsOrJunkRow(row)) continue;
-      estimates.push(parseCompositeRow(row, columns));
-    }
-    return {
-      parts: { columns: [...columns], rows: estimates.map((e) => e.row) },
-      labour: { columns: [...columns], rows: [] },
-      misc: emptyDynamicTable(),
-      undefinedParts: emptyDynamicTable(),
-      repairGroups: [],
-      repairEstimates: estimates,
-      notes,
-      labourServiceHints: [],
-      vehicleFromRows: extractRegNoFromRows(lineItems.rows),
-    };
-  }
-
-  const hsnIdx = findColumnIndex(columns, 'hsn/sac', 'hsn', 'sac');
-  const codeIdx = findColumnIndex(
-    columns,
-    'code / part',
-    'part no',
-    'part number',
-    'part#',
-    'job code',
-    'code',
-  );
-  const descIdx = findColumnIndex(
-    columns,
-    'description',
-    'particular',
-    'lab/part',
-    'labour description',
-  );
-  const plIdx = findExplicitPlColumnIndex(columns);
-  const typeIdx = findTypeColumnIndex(columns);
-  const amountIdxs = amountColumnIndexes(columns);
-
-  const partsRows: string[][] = [];
-  const labourRows: string[][] = [];
-  const miscRows: string[][] = [];
-  const undefinedRows: string[][] = [];
-  const labourServiceHints: string[] = [];
-  const notes: string[] = [];
-  const repairGroups: RepairGroup[] = [];
-  let currentGroup: RepairGroup | null = null;
-  let section: SectionKind | null = null;
-  let lastIsLabour: boolean | null = null;
-  let groupSeq = 0;
-
-  const vehicleFromRows = extractRegNoFromRows(lineItems.rows);
-
-  const attachToGroup = (bucket: 'parts' | 'labour', index: number) => {
-    if (!currentGroup) return;
-    currentGroup.members.push({ bucket, index });
-  };
-
-  const pushLabour = (row: string[]) => {
-    const idx = labourRows.length;
-    labourRows.push(row);
-    const desc = descIdx >= 0 ? (row[descIdx] ?? '') : rowBannerText(row);
-    labourServiceHints.push(inferServiceHint(desc));
-    lastIsLabour = true;
-    attachToGroup('labour', idx);
-  };
-
-  const pushParts = (row: string[]) => {
-    const idx = partsRows.length;
-    partsRows.push(row);
-    lastIsLabour = false;
-    attachToGroup('parts', idx);
-  };
-
-  const push = (row: string[], isLabour: boolean) => {
-    if (section === 'MISC') {
-      miscRows.push(row);
-      lastIsLabour = isLabour;
-      return;
-    }
-    if (section === 'UNDEFINED') {
-      undefinedRows.push(row);
-      lastIsLabour = isLabour;
-      return;
-    }
-    if (isLabour) pushLabour(row);
-    else pushParts(row);
-  };
-
-  for (const row of lineItems.rows) {
-    if (isVehicleInfoRow(row)) continue;
-
-    const banner = rowBannerText(row);
-    if (NOTE_RE.test(banner) && !hasPricedOrMarkedLine(row, hsnIdx, plIdx, amountIdxs)) {
-      notes.push(banner);
-      continue;
-    }
-
-    const sectionHit = detectSection(banner);
-    if (sectionHit && !hasPricedOrMarkedLine(row, hsnIdx, plIdx, amountIdxs)) {
-      // Repeated Parts header on continuation page: keep same PART section (don't clear group)
-      if (!(sectionHit === 'PART' && section === 'PART')) {
-        currentGroup = null;
-      }
-      section = sectionHit;
-      continue;
-    }
-
-    if (isRepairGroupBanner(row, hsnIdx, plIdx, amountIdxs)) {
-      groupSeq += 1;
-      currentGroup = {
-        id: `rg_${groupSeq}`,
-        title: banner.replace(/\s*[-–—]?\s*\(body\s*&\s*paint[^)]*\)/i, '').trim() || banner,
-        members: [],
-      };
-      repairGroups.push(currentGroup);
-      continue;
-    }
-
-    if (isTotalsOrJunkRow(row) && !hasPricedOrMarkedLine(row, hsnIdx, plIdx, amountIdxs)) continue;
-    if (!hasLineItemText(row, codeIdx, descIdx) && plIdx < 0) continue;
-
-    if (plIdx >= 0) {
-      const marker = (row[plIdx] ?? '').trim().toUpperCase();
-      if (marker === 'L') {
-        push(row, true);
-        continue;
-      }
-      if (marker === 'P') {
-        push(row, false);
-        continue;
-      }
-    }
-
-    if (typeIdx >= 0) {
-      const typed = typeColumnIsLabour(row[typeIdx] ?? '');
-      if (typed != null) {
-        push(row, typed);
-        continue;
-      }
-    }
-
-    if (section === 'LABOUR' || section === 'MISC' || section === 'UNDEFINED') {
-      push(row, section === 'LABOUR');
-      continue;
-    }
-    if (section === 'PART') {
-      const hsn = hsnIdx >= 0 ? normalizeHsn(row[hsnIdx] ?? '') : '';
-      if (isServiceHsn(hsn)) {
-        push(row, true);
-        continue;
-      }
-      push(row, false);
-      continue;
-    }
-
-    const hsn = hsnIdx >= 0 ? normalizeHsn(row[hsnIdx] ?? '') : '';
-    if (hsn.length >= 4) {
-      push(row, isServiceHsn(hsn));
-      continue;
-    }
-
-    if (isContinuationRow(row, hsnIdx, amountIdxs, codeIdx, descIdx) && lastIsLabour != null) {
-      push(row, lastIsLabour);
-      continue;
-    }
-
-    if (
-      amountIdxs.some((i) => cellLooksNumeric(row[i] ?? '')) ||
-      (codeIdx >= 0 && (row[codeIdx] ?? '').trim())
-    ) {
-      push(row, false);
-      continue;
-    }
-
-    if (lastIsLabour != null && isContinuationRow(row, hsnIdx, amountIdxs, codeIdx, descIdx)) {
-      push(row, lastIsLabour);
-    }
-  }
-
-  return {
-    parts: { columns: [...columns], rows: partsRows },
-    labour: { columns: [...columns], rows: labourRows },
-    misc: { columns: [...columns], rows: miscRows },
-    undefinedParts: { columns: [...columns], rows: undefinedRows },
-    repairGroups: repairGroups.filter((g) => g.members.length > 0),
-    repairEstimates: [],
-    notes,
-    labourServiceHints,
-    vehicleFromRows,
-  };
-}
-
-/** @deprecated use processLineItems — kept for call sites/tests expecting split shape */
-export function splitLineItems(lineItems: DynamicTable) {
-  const r = processLineItems(lineItems);
-  return {
-    parts: r.parts,
-    labour: r.labour,
-    vehicleFromRows: r.vehicleFromRows,
-  };
-}
-
-function reconcileTotals(
-  parts: DynamicTable,
-  labour: DynamicTable,
-  partsTotal: number | null,
-  labourTotal: number | null,
-  grandTotal: number | null,
-): { confidenceScore: number; requiresHumanReview: boolean } {
-  let review = false;
-  const partsSum = sumTableAmount(parts);
-  const labourSum = sumTableAmount(labour);
-
-  if (partsTotal != null && Math.abs(partsSum - partsTotal) > TOTAL_TOLERANCE && parts.rows.length > 0) {
-    review = true;
-  }
-  if (labourTotal != null && Math.abs(labourSum - labourTotal) > TOTAL_TOLERANCE && labour.rows.length > 0) {
-    review = true;
-  }
-  if (
-    grandTotal != null &&
-    partsTotal != null &&
-    labourTotal != null &&
-    Math.abs(partsTotal + labourTotal - grandTotal) > TOTAL_TOLERANCE * 2
-  ) {
-    // summary box may include tax — only soft flag if line sums wildly off grand
-    const lineSum = partsSum + labourSum;
-    if (lineSum > 0 && Math.abs(lineSum - grandTotal) > Math.max(TOTAL_TOLERANCE * 5, grandTotal * 0.15)) {
-      review = true;
-    }
-  }
-
-  return {
-    confidenceScore: review ? 0.75 : 0.9,
-    requiresHumanReview: review,
-  };
-}
-
-/** Map LlamaExtract payload → WORKSHOP UI / webhook shape (+ additive fields) */
-export function normalizeLlamaWorkshopResult(raw: unknown) {
-  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-
-  let processed: ProcessLineItemsResult;
-  if (obj.lineItems != null) {
-    processed = processLineItems(normalizeTable(obj.lineItems));
-  } else {
-    const parts = normalizeTable(obj.parts);
-    const labour = normalizeTable(obj.labour);
-    processed = {
-      parts,
-      labour,
-      misc: emptyDynamicTable(),
-      undefinedParts: emptyDynamicTable(),
-      repairGroups: [],
-      repairEstimates: [],
-      notes: [],
-      labourServiceHints: labour.rows.map((row) => {
-        const descIdx = findColumnIndex(labour.columns, 'description', 'particular', 'lab/part');
-        return inferServiceHint(descIdx >= 0 ? (row[descIdx] ?? '') : rowBannerText(row));
-      }),
-      vehicleFromRows: null,
-    };
-  }
-
-  const documentTitle = asNullableString(obj.documentTitle);
-  const partsTotal = asNullableNumber(obj.partsTotal);
-  const labourTotal = asNullableNumber(obj.labourTotal);
-  const grandTotal = asNullableNumber(obj.grandTotal);
-  const quality = reconcileTotals(
-    processed.parts,
-    processed.labour,
-    partsTotal,
-    labourTotal,
-    grandTotal,
-  );
-
-  return {
-    workshopDetails: {
-      name: asNullableString(obj.workshopName),
-      invoiceNumber: asNullableString(obj.invoiceNumber),
-      vehicleNumber: asNullableString(obj.vehicleNumber) ?? processed.vehicleFromRows,
-      gstin: null,
-      invoiceDate: null,
-      documentTitle,
-      jobCardNumber: null,
-      customerName: null,
-      odometerReading: null,
-    },
-    documentType: inferDocumentType(documentTitle),
-    summary: {
-      grandTotal,
-      partsTotal,
-      labourTotal,
-    },
-    parts: processed.parts,
-    labour: processed.labour,
-    misc: processed.misc,
-    undefinedParts: processed.undefinedParts,
-    repairGroups: processed.repairGroups,
-    repairEstimates: processed.repairEstimates,
-    notes: processed.notes,
-    labourServiceHints: processed.labourServiceHints,
-    confidenceScore: quality.confidenceScore,
-    requiresHumanReview: quality.requiresHumanReview,
-  };
-}
-
-// ponytail: self-checks — layout families + additive fields
-{
-  const honda = processLineItems({
-    columns: ['P/L', 'Part Number', 'HSN', 'Description', 'Total'],
-    rows: [
-      ['', '', '', 'RHS FENDER CHANGE - (Body & Paint Work)', ''],
-      ['L', 'PAINT1', '998714', 'PAINT CHGS FRONT FENDER', '1000'],
-      ['P', '74100', '87089900', 'PANEL R.FR FENDER', '5000'],
-    ],
-  });
-  console.assert(honda.labour.rows.length === 1 && honda.parts.rows.length === 1, 'Honda P/L');
-  console.assert(honda.repairGroups.length === 1 && honda.repairGroups[0].members.length === 2, 'Honda repair group');
-  console.assert(honda.labourServiceHints[0] === 'PAINTING', 'serviceHint painting');
-
-  const toyotaCols = ['Code / Part No', 'Description', 'SAC/HSN', 'QTY', 'Labour/Part Price'];
-  const toyota = processLineItems({
-    columns: toyotaCols,
-    rows: [
-      ['Labour Charges', '', '', '', ''],
-      ['52119PNP', 'Front Bumper Cover - Paint', '998729', '', '2,851.00'],
-      ['BODREP99', 'Others - Body Repair', '998729', '', '4,224.00'],
-      ['BODREP99', '- RIM REPLACE', '', '', ''],
-      ['Part Charges', '', '', '', ''],
-      ['A-42611-WC020', 'WHEEL, DISC', '87087000', '1', '1,589.00'],
-      ['', 'NOTE: Cabin Painting not included in this quotation.', '', '', ''],
-    ],
-  });
-  console.assert(toyota.labour.rows.length === 3, 'Toyota labour + child');
-  console.assert(toyota.parts.rows.length === 1, 'Toyota parts');
-  console.assert(toyota.notes.length === 1, 'estimate note');
-
-  const volvo = processLineItems({
-    columns: ['SR', 'HSN/SAC', 'Description', 'Taxable'],
-    rows: [
-      ['64', '40169390', 'TAPE', '100'],
-      ['164', '998714', 'Tilt cylinder removed and fitted', '500'],
-      ['65', '84159000', 'COOLANT PIPE', '200'],
-    ],
-  });
-  console.assert(volvo.parts.rows.length === 2 && volvo.labour.rows.length === 1, 'Volvo interleaved');
-
-  const misc = processLineItems({
-    columns: ['Code', 'Description', 'Amt'],
-    rows: [
-      ['Miscellaneous', '', ''],
-      ['', 'AC GAS', '50'],
-      ['Undefined Parts', '', ''],
-      ['', 'Sealant', '10'],
-    ],
-  });
-  console.assert(misc.misc.rows.length === 1 && misc.undefinedParts.rows.length === 1, 'misc/undefined');
-
-  console.assert(isInsuranceCompositeSchema(['Part No', 'Part Description', 'R&R Cost', 'Denting Cost', 'Painting Cost', 'Total']), 'composite schema');
-  const maruti = processLineItems({
-    columns: ['Part No', 'Part Description', 'Demand Type', 'R&R Cost', 'Denting Cost', 'Painting Cost', 'Total'],
-    rows: [
-      ['P1', 'PANEL FRONT HOOD', 'REPAIR', '615', '1000', '7365', '8980'],
-    ],
-  });
-  console.assert(maruti.repairEstimates.length === 1 && maruti.repairEstimates[0].demandType === 'REPAIR', 'Maruti composite');
-
-  console.assert(normalizeHsn('8708.99.00') === '87089900', 'normalizeHsn');
-  console.assert(inferDocumentType('Insurance Temporary Estimate') === 'TEMPORARY_ESTIMATE', 'documentType');
-
-  const norm = normalizeLlamaWorkshopResult({
-    workshopName: 'W',
-    documentTitle: 'TEMPORARY ESTIMATE',
-    invoiceNumber: '1',
-    vehicleNumber: null,
-    lineItems: {
-      columns: ['P/L', 'HSN', 'Description', 'Total'],
-      rows: [
-        ['L', '998714', 'Paint', '100'],
-        ['P', '87089900', 'Panel', '200'],
-      ],
-    },
-    partsTotal: 200,
-    labourTotal: 100,
-    grandTotal: 300,
-  });
-  console.assert(norm.documentType === 'TEMPORARY_ESTIMATE', 'norm documentType');
-  console.assert(norm.requiresHumanReview === false, 'reconcile ok');
-  console.assert(norm.repairGroups.length === 0, 'no orphan groups');
-}
 
 export class WorkshopBillExtractor {
-  async extract(urls: string[]): Promise<ReturnType<typeof normalizeLlamaWorkshopResult>> {
-    const apiKey = _config.LLAMA_CLOUD_API_KEY;
-    if (!apiKey || apiKey === 'changeme') {
-      throw ApiError.badRequest('LLAMA_CLOUD_API_KEY is not configured.');
-    }
+  private aiService: AIService;
+  private obs = ObserverService.getInstance();
 
-    const url = urls.find(Boolean);
-    if (!url) {
-      throw ApiError.badRequest('At least one PDF URL is required.');
-    }
+  constructor() {
+    this.aiService = AIService.getInstance();
+  }
 
-    let tmpPath: string | undefined;
+  private parseWorkshopResult(raw: unknown, tableLayout: WorkshopTableLayout = 'split') {
     try {
-      tmpPath = await downloadPdfToTemp(url);
-      const client = new LlamaCloud({ apiKey, timeout: POLL_TIMEOUT_MS });
-      const fileObj = await client.files.create({
-        file: fs.createReadStream(tmpPath),
-        purpose: 'extract',
-      });
-
-      const job = await client.extract.run(
-        {
-          file_input: fileObj.id,
-          configuration: {
-            data_schema: llamaWorkshopJsonSchema as ExtractConfigurationDataSchema,
-            extraction_target: 'per_doc',
-            tier: EXTRACT_TIER,
-          },
-        },
-        { timeout: 600 },
-      );
-
-      if (job.status !== 'COMPLETED') {
-        throw ApiError.internalServerError(
-          job.error_message ?? `LlamaExtract failed with status ${job.status}`,
+      const obj = raw as Record<string, unknown>;
+      const expanded =
+        tableLayout === 'sequential'
+          ? expandLineItemsArrayRows(obj)
+          : isLineItemsArrayFormat(obj)
+            ? expandLineItemsArrayRows(obj)
+            : isArrayRowFormat(obj)
+              ? expandWorkshopArrayRows(obj)
+              : expandWorkshopShortKeys(obj);
+      return WorkshopBillSchema.parse(expanded);
+    } catch (e) {
+      if (e instanceof ZodError) {
+        this.obs.logError('WorkshopBillExtractor: Zod validation failed', {
+          issueCount: e.issues.length,
+          issues: e.issues.slice(0, 10).map(i => ({
+            path: i.path.join('.'),
+            code: i.code,
+            message: i.message,
+          })),
+        });
+        throw new UnrecoverableDocumentError(
+          'EXTRACTION_SCHEMA_FAILED',
+          'Workshop bill structure could not be validated. Re-upload a clearer PDF or a standard repair invoice.',
         );
       }
+      throw e;
+    }
+  }
 
-      return normalizeLlamaWorkshopResult(job.extract_result);
-    } catch (err: any) {
-      if (err instanceof ApiError) throw err;
-      const msg = err?.message ?? String(err);
-      if (err?.status === 401 || /unauthorized|invalid.*api.?key/i.test(msg)) {
-        throw ApiError.unauthorized('LlamaCloud API key rejected.');
-      }
-      throw ApiError.internalServerError(`LlamaExtract error: ${msg}`);
-    } finally {
-      if (tmpPath) {
-        fs.promises.unlink(tmpPath).catch(() => {});
+  private async callGemini(
+    inputData: unknown,
+    prompt: string,
+    schema: Parameters<AIService['processDocument']>[2],
+    maxOutputTokens: number,
+    cacheKey: string,
+    model?: string,
+  ) {
+    return this.aiService.processDocument(
+      inputData,
+      prompt,
+      schema,
+      maxOutputTokens,
+      model ?? _config.WORKSHOP_AI_MODEL,
+      _config.WORKSHOP_MAX_GEMINI_RETRIES,
+      cacheKey,
+    );
+  }
+
+  /**
+   * Minimum rows expected for a chunk.
+   * Dense OEM bills (BharatBenz/DICV) often have ~20+ rows on page 1 alone —
+   * thresholds must exceed that so early stop mid-chunk triggers page-by-page retry.
+   */
+  private minRowsForChunk(
+    pageIndices: number[],
+    chunkIndex: number,
+    totalPageCount: number,
+  ): number {
+    const pagesInChunk = pageIndices.length;
+    const isFirstChunk = chunkIndex === 0 && pageIndices[0] === 1;
+    const isLastChunk = pageIndices[pageIndices.length - 1] === totalPageCount;
+    // First: 2 pages → 34, 3 pages → 56 (page-1-only ~20 fails)
+    if (isFirstChunk) return 12 + (pagesInChunk - 1) * 22;
+    // Last chunk often totals/terms — keep soft
+    if (isLastChunk) return Math.max(3, pagesInChunk * 5);
+    return pagesInChunk * 22;
+  }
+
+  /** flash-lite can stop mid-chunk (~16 rows) without throwing — split and retry per page. */
+  private isChunkSoftTruncated(
+    rowCount: number,
+    pageIndices: number[],
+    chunkIndex: number,
+    totalPageCount: number,
+  ): boolean {
+    if (rowCount === 0) return false;
+    return rowCount < this.minRowsForChunk(pageIndices, chunkIndex, totalPageCount);
+  }
+
+  private hasSerialGapsForTable(rows: Record<string, unknown>[]): boolean {
+    const serials: number[] = [];
+    for (const row of rows) {
+      const n = Number(row.srNo);
+      if (Number.isFinite(n) && n > 0) {
+        serials.push(n);
       }
     }
+    if (serials.length <= 1) return false;
+
+    const uniqueSerials = Array.from(new Set(serials)).sort((a, b) => a - b);
+
+    // Split into segments separated by large jumps (≥20).
+    // Dual-column invoices (Upcountry/Volvo) interleave two sequences like
+    // [1, 101, 2, 102, 3, 103], which sorts to [1,2,3,101,102,103] — a jump of
+    // 98 in the middle. Treating those as one range would always flag a gap.
+    // Instead we check each contiguous segment independently.
+    const segments: number[][] = [[uniqueSerials[0]]];
+    for (let i = 1; i < uniqueSerials.length; i++) {
+      if (uniqueSerials[i] - uniqueSerials[i - 1] >= 20) {
+        segments.push([]);
+      }
+      segments[segments.length - 1].push(uniqueSerials[i]);
+    }
+
+    for (const seg of segments) {
+      if (seg.length <= 1) continue;
+      const segMin = seg[0];
+      const segMax = seg[seg.length - 1];
+      if (segMax - segMin + 1 > seg.length) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Sequential layout: detect holes in printed Sr.No within the same rowType
+   * (e.g. PART 20 → 84). Ignores expected PART→LABOUR section restarts.
+   * Unlike hasSerialGapsForTable, does not split on large jumps — those ARE the bug.
+   */
+  private hasConsecutiveSectionSerialGaps(rows: Record<string, unknown>[]): boolean {
+    let prevType: string | null = null;
+    let prevSr: number | null = null;
+
+    for (const row of rows) {
+      const rt = String(row.rowType ?? '').trim().toUpperCase();
+      if (rt !== 'PART' && rt !== 'LABOUR') {
+        prevType = null;
+        prevSr = null;
+        continue;
+      }
+
+      const n = Number(row.srNo);
+      if (!Number.isFinite(n) || n <= 0) {
+        prevType = rt;
+        prevSr = null;
+        continue;
+      }
+
+      if (prevType === rt && prevSr !== null && n - prevSr > 1) {
+        return true;
+      }
+
+      prevType = rt;
+      prevSr = n;
+    }
+
+    return false;
+  }
+
+  private hasSerialGaps(parts: Record<string, unknown>[], labour: Record<string, unknown>[]): boolean {
+    return this.hasSerialGapsForTable(parts) || this.hasSerialGapsForTable(labour);
+  }
+
+  private maxSerialFromRows(rows: Record<string, unknown>[]): number {
+    let max = 0;
+    for (const row of rows) {
+      const n = Number(row.srNo);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+    return max;
+  }
+
+  /** Split line items into pageCount contiguous segments (document order). */
+  private partitionLineItemsByPageEstimate(
+    rows: Record<string, unknown>[],
+    pageCount: number,
+  ): Record<string, unknown>[][] {
+    if (pageCount <= 0) return [];
+    if (pageCount === 1) return [rows];
+    if (rows.length === 0) return Array.from({ length: pageCount }, () => []);
+
+    const base = Math.floor(rows.length / pageCount);
+    const rem = rows.length % pageCount;
+    const segments: Record<string, unknown>[][] = [];
+    let offset = 0;
+    for (let i = 0; i < pageCount; i++) {
+      // Prefer proportional sizes; last segment gets the remainder.
+      const size = i === pageCount - 1 ? base + rem : base;
+      segments.push(rows.slice(offset, offset + size));
+      offset += size;
+    }
+    return segments;
+  }
+
+  /**
+   * Decide which pages to re-extract vs keep from the initial multi-page pass.
+   * Indexes are positions into pageIndices (0..n-1).
+   */
+  private resolveSequentialPagesToRetry(params: {
+    pageIndices: number[];
+    initialRows: Record<string, unknown>[];
+    softTrunc: boolean;
+    serialGap: boolean;
+    colShift: boolean;
+  }): {
+    keepByPageIndex: Map<number, Record<string, unknown>[]>;
+    retryPageIndexes: number[];
+  } {
+    const { pageIndices, initialRows, softTrunc, serialGap, colShift } = params;
+    const n = pageIndices.length;
+    const keepByPageIndex = new Map<number, Record<string, unknown>[]>();
+    const retryPageIndexes: number[] = [];
+
+    const retryAll = () => {
+      keepByPageIndex.clear();
+      return {
+        keepByPageIndex,
+        retryPageIndexes: Array.from({ length: n }, (_, i) => i),
+      };
+    };
+
+    // Soft-trunc with continuous serials → early stop: keep initial as page 0, retry later pages.
+    if (softTrunc && !serialGap) {
+      keepByPageIndex.set(0, initialRows);
+      for (let i = 1; i < n; i++) retryPageIndexes.push(i);
+      return { keepByPageIndex, retryPageIndexes };
+    }
+
+    // Column-shift only → keep clean estimated page segments, retry dirty ones.
+    if (colShift && !softTrunc && !serialGap) {
+      const segments = this.partitionLineItemsByPageEstimate(initialRows, n);
+      for (let i = 0; i < n; i++) {
+        const seg = segments[i] ?? [];
+        const segBad =
+          hasColumnShiftDescriptionIssues(seg) ||
+          (seg.length >= 3 && countStructurallyBadLineItemDescriptions(seg) >= 1);
+        if (segBad) {
+          retryPageIndexes.push(i);
+        } else {
+          keepByPageIndex.set(i, seg);
+        }
+      }
+      if (retryPageIndexes.length === 0) return retryAll();
+      return { keepByPageIndex, retryPageIndexes };
+    }
+
+    // Serial gaps or soft-trunc+gaps — cannot localize safely.
+    return retryAll();
+  }
+
+  private async runSequentialSinglePageWithOptionalPro(
+    inputData: unknown,
+    pageNum: number,
+    pageIsFirst: boolean,
+    chunkIndex: number,
+  ): Promise<LeanSequentialChunkExtractResult> {
+    let sub = await this.runSingleLeanChunkExtract(
+      inputData,
+      [pageNum],
+      pageIsFirst,
+      `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageNum}`,
+      'sequential',
+    ) as LeanSequentialChunkExtractResult;
+
+    const subRows = sub.lineItems.length;
+    const subHasColumnShift = hasColumnShiftDescriptionIssues(sub.lineItems);
+    if (
+      this.hasConsecutiveSectionSerialGaps(sub.lineItems) ||
+      subHasColumnShift ||
+      subRows >= 15
+    ) {
+      const proModel = _config.WORKSHOP_AI_MODEL;
+      if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Sequential single-page run for page ${pageNum} appears truncated/long/shifted (${subRows} rows). Retrying page with Pro model (${proModel}).`,
+        );
+        try {
+          const proSub = await this.runSingleLeanChunkExtract(
+            inputData,
+            [pageNum],
+            pageIsFirst,
+            `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageNum}-PRO`,
+            'sequential',
+            proModel,
+          ) as LeanSequentialChunkExtractResult;
+          const subBad = countStructurallyBadLineItemDescriptions(sub.lineItems);
+          const proBad = countStructurallyBadLineItemDescriptions(proSub.lineItems);
+          if (proSub.lineItems.length > subRows || proBad < subBad) {
+            this.obs.info(
+              `WorkshopBillExtractor: Sequential page ${pageNum} Pro model preferred — rows ${subRows}→${proSub.lineItems.length}, badDesc ${subBad}→${proBad}.`,
+            );
+            sub = proSub;
+          }
+        } catch (e) {
+          this.obs.warn(`WorkshopBillExtractor: Sequential page ${pageNum} Pro model fallback failed`, { error: e });
+        }
+      }
+    }
+
+    return sub;
+  }
+
+  private async runSingleLeanChunkExtract(
+    inputData: unknown,
+    pageIndices: number[],
+    isFirst: boolean,
+    cacheSuffix: string,
+    tableLayout: WorkshopTableLayout = 'split',
+    modelOverride?: string,
+  ): Promise<LeanChunkExtractResult | LeanSequentialChunkExtractResult> {
+    if (tableLayout === 'sequential') {
+      return this.runSingleLeanSequentialChunkExtract(
+        inputData,
+        pageIndices,
+        isFirst,
+        cacheSuffix,
+        modelOverride,
+      );
+    }
+
+    const chunkModel = modelOverride ?? _config.WORKSHOP_CHUNK_AI_MODEL;
+    const chunkTokens = computeWorkshopMaxTokens(
+      pageIndices.length,
+      _config.WORKSHOP_MAX_OUTPUT_TOKENS,
+    );
+
+    const slice = await buildSliceInput(inputData, pageIndices, cacheSuffix);
+    try {
+      const chunk = (await this.callGemini(
+        slice.input,
+        isFirst
+          ? getWorkshopLeanArrayFirstChunkPrompt()
+          : getWorkshopChunkArrayPrompt(),
+        isFirst ? WorkshopLeanArraySchema : WorkshopChunkArraySchema,
+        chunkTokens,
+        cacheSuffix,
+        chunkModel,
+      )) as WorkshopRawResult;
+
+      const expanded = expandWorkshopArrayRows(chunk);
+      const parts = Array.isArray(expanded.partsTable)
+        ? (expanded.partsTable as Record<string, unknown>[])
+        : [];
+      const labour = Array.isArray(expanded.labourTable)
+        ? (expanded.labourTable as Record<string, unknown>[])
+        : [];
+
+      return { raw: chunk, parts, labour };
+    } finally {
+      await slice.dispose();
+    }
+  }
+
+  private async runSingleLeanSequentialChunkExtract(
+    inputData: unknown,
+    pageIndices: number[],
+    isFirst: boolean,
+    cacheSuffix: string,
+    modelOverride?: string,
+  ): Promise<LeanSequentialChunkExtractResult> {
+    const chunkModel = modelOverride ?? _config.WORKSHOP_CHUNK_AI_MODEL;
+    const chunkTokens = computeWorkshopMaxTokens(
+      pageIndices.length,
+      _config.WORKSHOP_MAX_OUTPUT_TOKENS,
+    );
+
+    const slice = await buildSliceInput(inputData, pageIndices, cacheSuffix);
+    try {
+      const chunk = (await this.callGemini(
+        slice.input,
+        isFirst
+          ? getWorkshopLeanArrayFirstChunkPrompt('sequential')
+          : getWorkshopChunkArrayPrompt('sequential'),
+        isFirst ? WorkshopLeanArraySequentialSchema : WorkshopChunkArraySequentialSchema,
+        chunkTokens,
+        cacheSuffix,
+        chunkModel,
+      )) as WorkshopRawResult;
+
+      const expanded = expandLineItemsArrayRows(chunk);
+      const lineItems = Array.isArray(expanded.lineItemsTable)
+        ? (expanded.lineItemsTable as Record<string, unknown>[])
+        : [];
+
+      return { raw: chunk, lineItems };
+    } finally {
+      await slice.dispose();
+    }
+  }
+
+  /**
+   * Extract one chunk; if flash-lite stops early, retry each page in the chunk separately.
+   * Only splits when multi-page chunk looks truncated — keeps cost low for normal bills.
+   */
+  private async extractLeanChunkResilient(
+    inputData: unknown,
+    pageIndices: number[],
+    chunkIndex: number,
+    totalPageCount: number,
+    isFirst: boolean,
+    tableLayout: WorkshopTableLayout = 'split',
+  ): Promise<LeanChunkExtractResult | LeanSequentialChunkExtractResult> {
+    const pageStart = pageIndices[0];
+    const pageEnd = pageIndices[pageIndices.length - 1];
+
+    this.obs.info(
+      `WorkshopBillExtractor: Lean chunk ${chunkIndex + 1} — pages ${pageStart}–${pageEnd} (${tableLayout})`,
+    );
+
+    let initial = await this.runSingleLeanChunkExtract(
+      inputData,
+      pageIndices,
+      isFirst,
+      `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}`,
+      tableLayout,
+    );
+
+    if (tableLayout === 'sequential') {
+      return this.extractLeanSequentialChunkResilient(
+        inputData,
+        pageIndices,
+        chunkIndex,
+        totalPageCount,
+        isFirst,
+        initial as LeanSequentialChunkExtractResult,
+      );
+    }
+
+    const splitInitial = initial as LeanChunkExtractResult;
+    let initialRows = splitInitial.parts.length + splitInitial.labour.length;
+
+    let isTruncated = this.isChunkSoftTruncated(initialRows, pageIndices, chunkIndex, totalPageCount);
+    if (!isTruncated && this.hasSerialGaps(splitInitial.parts, splitInitial.labour)) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Gap in serial numbers detected on initial chunk ${chunkIndex + 1}. Marking as truncated.`,
+        { parts: splitInitial.parts.length, labour: splitInitial.labour.length }
+      );
+      isTruncated = true;
+    }
+
+    if (!isTruncated) {
+      return splitInitial;
+    }
+
+    // Single-page chunk truncation fallback: retry with the Pro model (WORKSHOP_AI_MODEL)
+    if (pageIndices.length <= 1) {
+      const proModel = _config.WORKSHOP_AI_MODEL;
+      if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Single-page chunk ${chunkIndex + 1} (page ${pageStart}) is truncated or has gaps. Retrying with Pro model (${proModel}).`,
+          { rowCount: initialRows }
+        );
+        try {
+          const proResult = await this.runSingleLeanChunkExtract(
+            inputData,
+            pageIndices,
+            isFirst,
+            `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}-PRO`,
+            'split',
+            proModel,
+          ) as LeanChunkExtractResult;
+          const proRows = proResult.parts.length + proResult.labour.length;
+          if (proRows > initialRows) {
+            this.obs.info(
+              `WorkshopBillExtractor: Pro model extraction successful — rows increased from ${initialRows} to ${proRows}.`,
+            );
+            return proResult;
+          }
+        } catch (e) {
+          this.obs.warn(`WorkshopBillExtractor: Pro model fallback failed for page ${pageStart}, using initial Lite results`, { error: e });
+        }
+      }
+      return splitInitial;
+    }
+
+    this.obs.warn(
+      `WorkshopBillExtractor: Chunk ${chunkIndex + 1} soft-truncated (${initialRows} rows for ` +
+      `pages ${pageStart}–${pageEnd}) — retrying page-by-page.`,
+      { pageIndices, initialRows },
+    );
+
+    const splitSoftTrunc = this.isChunkSoftTruncated(
+      initialRows,
+      pageIndices,
+      chunkIndex,
+      totalPageCount,
+    );
+    const splitSerialGap = this.hasSerialGaps(splitInitial.parts, splitInitial.labour);
+    // Early-stop: continuous serials + soft trunc → keep initial as first page, only extract later pages.
+    const splitEarlyStop = splitSoftTrunc && !splitSerialGap;
+
+    const mergedParts: Record<string, unknown>[] = [];
+    const mergedLabour: Record<string, unknown>[] = [];
+    let gateRaw = splitInitial.raw;
+
+    if (splitEarlyStop) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Split chunk ${chunkIndex + 1} early-stop — keeping initial rows as page ${pageIndices[0]}, re-extracting later page(s).`,
+        { pageIndices, initialRows },
+      );
+      mergedParts.push(...splitInitial.parts);
+      mergedLabour.push(...splitInitial.labour);
+    }
+
+    const startIdx = splitEarlyStop ? 1 : 0;
+    for (let p = startIdx; p < pageIndices.length; p++) {
+      const singlePage = [pageIndices[p]];
+      const pageIsFirst = isFirst && p === 0;
+      let sub = await this.runSingleLeanChunkExtract(
+        inputData,
+        singlePage,
+        pageIsFirst,
+        `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[p]}`,
+        'split',
+      ) as LeanChunkExtractResult;
+
+      // If a single page run has serial number gaps or output truncation zones (e.g. >= 15 rows),
+      // we retry it with the Pro model.
+      const subRows = sub.parts.length + sub.labour.length;
+      if (this.hasSerialGaps(sub.parts, sub.labour) || subRows >= 15) {
+        const proModel = _config.WORKSHOP_AI_MODEL;
+        if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+          this.obs.warn(
+            `WorkshopBillExtractor: Single-page run for page ${pageIndices[p]} appears truncated/long (${subRows} rows). Retrying page with Pro model (${proModel}).`,
+          );
+          try {
+            const proSub = await this.runSingleLeanChunkExtract(
+              inputData,
+              singlePage,
+              pageIsFirst,
+              `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[p]}-PRO`,
+              'split',
+              proModel,
+            ) as LeanChunkExtractResult;
+            const proRows = proSub.parts.length + proSub.labour.length;
+            if (proRows > subRows) {
+              this.obs.info(
+                `WorkshopBillExtractor: Page ${pageIndices[p]} Pro model extraction successful — rows increased from ${subRows} to ${proRows}.`,
+              );
+              sub = proSub;
+            }
+          } catch (e) {
+            this.obs.warn(`WorkshopBillExtractor: Page ${pageIndices[p]} Pro model fallback failed`, { error: e });
+          }
+        }
+      }
+
+      if (pageIsFirst) gateRaw = sub.raw;
+      resequenceTableSerials(sub.parts, this.maxSerialFromRows(mergedParts));
+      resequenceTableSerials(sub.labour, this.maxSerialFromRows(mergedLabour));
+      mergedParts.push(...sub.parts);
+      mergedLabour.push(...sub.labour);
+    }
+
+    // Early-stop fallback: if still short or gapped, also re-extract first page.
+    if (splitEarlyStop) {
+      const mergedCount = mergedParts.length + mergedLabour.length;
+      const stillShort = this.isChunkSoftTruncated(
+        mergedCount,
+        pageIndices,
+        chunkIndex,
+        totalPageCount,
+      );
+      const stillGapped = this.hasSerialGaps(mergedParts, mergedLabour);
+      if (stillShort || stillGapped) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Split chunk ${chunkIndex + 1} early-stop fallback — re-extracting page ${pageIndices[0]}.`,
+        );
+        const pageIsFirst = isFirst;
+        let sub = await this.runSingleLeanChunkExtract(
+          inputData,
+          [pageIndices[0]],
+          pageIsFirst,
+          `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[0]}-FALLBACK`,
+          'split',
+        ) as LeanChunkExtractResult;
+        const subRows = sub.parts.length + sub.labour.length;
+        if (this.hasSerialGaps(sub.parts, sub.labour) || subRows >= 15) {
+          const proModel = _config.WORKSHOP_AI_MODEL;
+          if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+            try {
+              const proSub = await this.runSingleLeanChunkExtract(
+                inputData,
+                [pageIndices[0]],
+                pageIsFirst,
+                `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}P${pageIndices[0]}-FALLBACK-PRO`,
+                'split',
+                proModel,
+              ) as LeanChunkExtractResult;
+              if (proSub.parts.length + proSub.labour.length > subRows) {
+                sub = proSub;
+              }
+            } catch (e) {
+              this.obs.warn(`WorkshopBillExtractor: Page ${pageIndices[0]} fallback Pro failed`, { error: e });
+            }
+          }
+        }
+        if (pageIsFirst) gateRaw = sub.raw;
+        const restParts = mergedParts.slice(splitInitial.parts.length);
+        const restLabour = mergedLabour.slice(splitInitial.labour.length);
+        resequenceTableSerials(sub.parts, 0);
+        resequenceTableSerials(sub.labour, 0);
+        resequenceTableSerials(restParts, this.maxSerialFromRows(sub.parts));
+        resequenceTableSerials(restLabour, this.maxSerialFromRows(sub.labour));
+        mergedParts.length = 0;
+        mergedLabour.length = 0;
+        mergedParts.push(...sub.parts, ...restParts);
+        mergedLabour.push(...sub.labour, ...restLabour);
+      }
+    }
+
+    return { raw: gateRaw, parts: mergedParts, labour: mergedLabour };
+  }
+
+  private async extractLeanSequentialChunkResilient(
+    inputData: unknown,
+    pageIndices: number[],
+    chunkIndex: number,
+    totalPageCount: number,
+    isFirst: boolean,
+    initial: LeanSequentialChunkExtractResult,
+  ): Promise<LeanSequentialChunkExtractResult> {
+    const pageStart = pageIndices[0];
+    let initialRows = initial.lineItems.length;
+
+    let isTruncated = this.isChunkSoftTruncated(initialRows, pageIndices, chunkIndex, totalPageCount);
+    if (!isTruncated && this.hasSerialGapsForTable(initial.lineItems)) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Gap in serial numbers on sequential chunk ${chunkIndex + 1}. Marking as truncated.`,
+        { lineItems: initialRows },
+      );
+      isTruncated = true;
+    }
+    if (!isTruncated && this.hasConsecutiveSectionSerialGaps(initial.lineItems)) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Consecutive section Sr.No gap on sequential chunk ${chunkIndex + 1}. Marking as truncated.`,
+        { lineItems: initialRows },
+      );
+      isTruncated = true;
+    }
+    if (!isTruncated && hasColumnShiftDescriptionIssues(initial.lineItems)) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Column-shift description issues on sequential chunk ${chunkIndex + 1}. Marking as truncated.`,
+        {
+          lineItems: initialRows,
+          badDescriptions: countStructurallyBadLineItemDescriptions(initial.lineItems),
+        },
+      );
+      isTruncated = true;
+    }
+
+    if (!isTruncated) {
+      return initial;
+    }
+
+    if (pageIndices.length <= 1) {
+      const proModel = _config.WORKSHOP_AI_MODEL;
+      if (proModel && proModel !== _config.WORKSHOP_CHUNK_AI_MODEL) {
+        try {
+          const proResult = await this.runSingleLeanChunkExtract(
+            inputData,
+            pageIndices,
+            isFirst,
+            `WORKSHOP-LEAN-CHUNK-${chunkIndex + 1}-PRO`,
+            'sequential',
+            proModel,
+          ) as LeanSequentialChunkExtractResult;
+          const initialBad = countStructurallyBadLineItemDescriptions(initial.lineItems);
+          const proBad = countStructurallyBadLineItemDescriptions(proResult.lineItems);
+          if (
+            proResult.lineItems.length > initialRows ||
+            proBad < initialBad
+          ) {
+            return proResult;
+          }
+        } catch (e) {
+          this.obs.warn(`WorkshopBillExtractor: Sequential Pro fallback failed for page ${pageStart}`, { error: e });
+        }
+      }
+      return initial;
+    }
+
+    const softTrunc = this.isChunkSoftTruncated(initialRows, pageIndices, chunkIndex, totalPageCount);
+    const serialGap =
+      this.hasSerialGapsForTable(initial.lineItems) ||
+      this.hasConsecutiveSectionSerialGaps(initial.lineItems);
+    const colShift = hasColumnShiftDescriptionIssues(initial.lineItems);
+
+    const { keepByPageIndex, retryPageIndexes } = this.resolveSequentialPagesToRetry({
+      pageIndices,
+      initialRows: initial.lineItems,
+      softTrunc,
+      serialGap,
+      colShift,
+    });
+
+    this.obs.warn(
+      `WorkshopBillExtractor: Sequential chunk ${chunkIndex + 1} needs retry — ` +
+      `softTrunc=${softTrunc}, serialGap=${serialGap}, colShift=${colShift}; ` +
+      `keeping ${keepByPageIndex.size} page(s), re-extracting ${retryPageIndexes.length} page(s).`,
+      {
+        pageIndices,
+        initialRows,
+        keepPages: [...keepByPageIndex.keys()].map((i) => pageIndices[i]),
+        retryPages: retryPageIndexes.map((i) => pageIndices[i]),
+      },
+    );
+
+    const pageSlots: (Record<string, unknown>[] | null)[] = pageIndices.map((_, i) =>
+      keepByPageIndex.has(i) ? (keepByPageIndex.get(i) as Record<string, unknown>[]) : null,
+    );
+    const freshlyExtracted = new Set<number>();
+    let gateRaw = initial.raw;
+
+    const extractSlot = async (i: number) => {
+      const pageNum = pageIndices[i];
+      const pageIsFirst = isFirst && i === 0;
+      const sub = await this.runSequentialSinglePageWithOptionalPro(
+        inputData,
+        pageNum,
+        pageIsFirst,
+        chunkIndex,
+      );
+      pageSlots[i] = sub.lineItems;
+      freshlyExtracted.add(i);
+      if (pageIsFirst) gateRaw = sub.raw;
+    };
+
+    for (const i of retryPageIndexes) {
+      await extractSlot(i);
+    }
+
+    for (let i = 0; i < pageSlots.length; i++) {
+      if (pageSlots[i] === null) {
+        await extractSlot(i);
+      }
+    }
+
+    let mergedLineItems = pageSlots.flatMap((slot) => slot ?? []);
+
+    // Mixed / incomplete: after early-stop append, fix remaining column-shift or still-short output.
+    const stillSoft = this.isChunkSoftTruncated(
+      mergedLineItems.length,
+      pageIndices,
+      chunkIndex,
+      totalPageCount,
+    );
+    const stillGap =
+      this.hasSerialGapsForTable(mergedLineItems) ||
+      this.hasConsecutiveSectionSerialGaps(mergedLineItems);
+    const stillColShift = hasColumnShiftDescriptionIssues(mergedLineItems);
+
+    if (stillSoft || stillGap || stillColShift) {
+      const fallbackRetry = new Set<number>();
+
+      if (stillSoft || stillGap) {
+        for (let i = 0; i < pageIndices.length; i++) {
+          if (!freshlyExtracted.has(i)) fallbackRetry.add(i);
+        }
+      }
+
+      if (stillColShift) {
+        const segments = this.partitionLineItemsByPageEstimate(mergedLineItems, pageIndices.length);
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i] ?? [];
+          const segBad =
+            hasColumnShiftDescriptionIssues(seg) ||
+            (seg.length >= 3 && countStructurallyBadLineItemDescriptions(seg) >= 1);
+          if (segBad) fallbackRetry.add(i);
+        }
+      }
+
+      if (fallbackRetry.size > 0) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Sequential chunk ${chunkIndex + 1} post-surgical fallback — re-extracting pages ${[...fallbackRetry].map((i) => pageIndices[i]).join(',')}.`,
+        );
+        for (const i of fallbackRetry) {
+          await extractSlot(i);
+        }
+        mergedLineItems = pageSlots.flatMap((slot) => slot ?? []);
+      }
+    }
+
+    return { raw: gateRaw, lineItems: mergedLineItems };
+  }
+
+  /**
+   * Lean chunk fallback — skips separate meta pass.
+   * First chunk includes gate check; subsequent chunks extract tables only.
+   * Saves 1 Gemini API call vs full chunk fallback.
+   */
+  private async extractChunkFallbackLean(
+    inputData: unknown,
+    pageCount: number,
+    tableLayout: WorkshopTableLayout = 'split',
+  ): Promise<WorkshopRawResult> {
+    const chunkSize = _config.WORKSHOP_CHUNK_PAGE_SIZE;
+    const chunks = buildPageChunks(pageCount, chunkSize);
+
+    this.obs.info(
+      `WorkshopBillExtractor: Lean chunk mode (${tableLayout}) — ${pageCount} page(s), ` +
+      `${chunks.length} slice(s), ${chunkSize} pages/chunk, model=${_config.WORKSHOP_CHUNK_AI_MODEL}`,
+    );
+
+    if (tableLayout === 'sequential') {
+      const allLineItems: Record<string, unknown>[] = [];
+      let gateResult: WorkshopRawResult | undefined;
+
+      for (let i = 0; i < chunks.length; i++) {
+        const pageIndices = chunks[i];
+        const isFirst = i === 0;
+
+        const result = await this.extractLeanChunkResilient(
+          inputData,
+          pageIndices,
+          i,
+          pageCount,
+          isFirst,
+          'sequential',
+        ) as LeanSequentialChunkExtractResult;
+
+        if (isFirst) {
+          gateResult = result.raw;
+          enforceDocumentTypeGates(result.raw, {
+            extractorName: 'WorkshopBillExtractor',
+            wrongTypeMessage: (typeStr) =>
+              `The uploaded document appears to be a "${typeStr}", not a Workshop Bill. ` +
+              'Please upload a valid repair/service bill, proforma estimate, or job card.',
+            mixedBatchMessage: (pageList) =>
+              `Mixed document batch detected for Workshop Bill extraction. ${pageList} ` +
+              'Please ensure all uploaded pages belong to the same workshop bill or repair estimate.',
+          });
+        }
+
+        allLineItems.push(...result.lineItems);
+      }
+
+      const mergedLineItems = mergeLineItemsRows(allLineItems);
+
+      if (this.hasConsecutiveSectionSerialGaps(mergedLineItems)) {
+        this.obs.warn(
+          `WorkshopBillExtractor: Consecutive section Sr.No gap after sequential merge — ` +
+          `rows=${mergedLineItems.length}. Some table rows may be missing; flagging for human review.`,
+          { totalRows: mergedLineItems.length, pageCount },
+        );
+        if (gateResult) {
+          gateResult = {
+            ...gateResult,
+            requiresHumanReview: true,
+            confidenceScore: Math.min(Number(gateResult.confidenceScore ?? 1), 0.75),
+          };
+        }
+      }
+
+      if (hasColumnShiftDescriptionIssues(mergedLineItems)) {
+        const badDescriptions = countStructurallyBadLineItemDescriptions(mergedLineItems);
+        this.obs.warn(
+          `WorkshopBillExtractor: Column-shift description issues after sequential merge — ` +
+          `badDesc=${badDescriptions}/${mergedLineItems.length}. Flagging for human review.`,
+          { badDescriptions, totalRows: mergedLineItems.length, pageCount },
+        );
+        if (gateResult) {
+          gateResult = {
+            ...gateResult,
+            requiresHumanReview: true,
+            confidenceScore: Math.min(Number(gateResult.confidenceScore ?? 1), 0.75),
+          };
+        }
+      }
+
+      return {
+        ...(gateResult ?? {}),
+        tableLayout: 'sequential',
+        lineItemsTable: mergedLineItems,
+      };
+    }
+
+    const allParts: Record<string, unknown>[] = [];
+    const allLabour: Record<string, unknown>[] = [];
+    let gateResult: WorkshopRawResult | undefined;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const pageIndices = chunks[i];
+      const isFirst = i === 0;
+
+      const result = await this.extractLeanChunkResilient(
+        inputData,
+        pageIndices,
+        i,
+        pageCount,
+        isFirst,
+        'split',
+      ) as LeanChunkExtractResult;
+
+      if (isFirst) {
+        gateResult = result.raw;
+        enforceDocumentTypeGates(result.raw, {
+          extractorName: 'WorkshopBillExtractor',
+          wrongTypeMessage: (typeStr) =>
+            `The uploaded document appears to be a "${typeStr}", not a Workshop Bill. ` +
+            'Please upload a valid repair/service bill, proforma estimate, or job card.',
+          mixedBatchMessage: (pageList) =>
+            `Mixed document batch detected for Workshop Bill extraction. ${pageList} ` +
+            'Please ensure all uploaded pages belong to the same workshop bill or repair estimate.',
+        });
+      }
+
+      resequenceTableSerials(result.parts, this.maxSerialFromRows(allParts));
+      resequenceTableSerials(result.labour, this.maxSerialFromRows(allLabour));
+      allParts.push(...result.parts);
+      allLabour.push(...result.labour);
+    }
+
+    const mergedParts = mergeWorkshopTableRows(allParts, 'totalPrice');
+    const mergedLabour = mergeWorkshopTableRows(allLabour, 'totalAmount');
+
+    const maxSr = Math.max(
+      this.maxSerialFromRows(mergedParts),
+      this.maxSerialFromRows(mergedLabour),
+    );
+    const totalRows = mergedParts.length + mergedLabour.length;
+    if (maxSr > 0 && maxSr > totalRows + 2) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Sr.No gap after merge — maxSr=${maxSr}, rows=${totalRows}. ` +
+        'Some table rows may be missing; flagging for human review.',
+        { maxSr, totalRows, pageCount },
+      );
+      if (gateResult) {
+        gateResult = {
+          ...gateResult,
+          requiresHumanReview: true,
+          confidenceScore: Math.min(Number(gateResult.confidenceScore ?? 1), 0.75),
+        };
+      }
+    }
+
+    return {
+      ...(gateResult ?? {}),
+      tableLayout: 'split',
+      partsTable: mergedParts,
+      labourTable: mergedLabour,
+    };
+  }
+
+  private async extractWithFallback(
+    inputData: unknown,
+    pageCount: number,
+    tableLayout: WorkshopTableLayout = 'split',
+  ): Promise<WorkshopRawResult> {
+    return this.extractChunkFallbackLean(inputData, pageCount, tableLayout);
+  }
+
+  public async extract(
+    inputData: unknown,
+    options: WorkshopExtractOptions = {},
+  ) {
+    const tableLayout = options.tableLayout === 'split' ? 'split' : 'sequential';
+    const fileCount = Array.isArray(inputData) ? inputData.length : 1;
+    const pageCount = resolveDocumentPageCount(inputData);
+
+    this.obs.info(
+      `WorkshopBillExtractor: Starting extraction — ${fileCount} file(s), ` +
+      `${pageCount} PDF page(s), tableLayout=${tableLayout}`,
+    );
+
+    const rawResult = await this.extractWithFallback(inputData, pageCount, tableLayout);
+
+    this.obs.info('WorkshopBillExtractor: Raw extraction complete, validating with Zod schema...');
+
+    const parsedResult = this.parseWorkshopResult(rawResult, tableLayout);
+
+    if (Array.isArray(parsedResult.lineItemsTable) && parsedResult.lineItemsTable.length > 0) {
+      assignTableRowIndexes(parsedResult.lineItemsTable as Record<string, unknown>[]);
+    }
+    if (tableLayout === 'split') {
+      if (Array.isArray(parsedResult.partsTable) && parsedResult.partsTable.length > 0) {
+        assignTableRowIndexes(parsedResult.partsTable as Record<string, unknown>[]);
+      }
+      if (Array.isArray(parsedResult.labourTable) && parsedResult.labourTable.length > 0) {
+        assignTableRowIndexes(parsedResult.labourTable as Record<string, unknown>[]);
+      }
+    }
+
+    const confidence = parsedResult.confidenceScore ?? 0;
+    const hasPartsOrLabour =
+      (parsedResult.partsTable?.length ?? 0) > 0 ||
+      (parsedResult.labourTable?.length ?? 0) > 0 ||
+      (parsedResult.lineItemsTable?.length ?? 0) > 0;
+
+    const hasWorkshopIdentity =
+      !isEffectivelyEmpty(parsedResult.workshopDetails?.name) ||
+      !isEffectivelyEmpty(parsedResult.workshopDetails?.invoiceNumber);
+
+    if (!hasPartsOrLabour && !hasWorkshopIdentity) {
+      rejectWrongTypeOrUnreadable(
+        'WorkshopBillExtractor',
+        confidence,
+        confidence >= 0.3,
+        'The uploaded document does not appear to be a Workshop Bill or Invoice. ' +
+        'A valid workshop bill must contain repair parts, labour charges, or at minimum a workshop name and invoice number. ' +
+        'Supported formats: Workshop Estimate, Proforma Invoice, Job Card, or Final Invoice (PDF/image).',
+        'The uploaded document could not be read. ' +
+        'Please ensure the image is clear and shows the full workshop bill. ' +
+        'Re-upload a higher quality scan or photo.',
+      );
+    }
+
+    const summary = parsedResult.summary;
+    const gstInfo = normaliseGst({
+      igstRate: summary?.igstRate,
+      igstAmount: summary?.igstAmount,
+      cgstRate: summary?.cgstRate,
+      cgstAmount: summary?.cgstAmount,
+      sgstRate: summary?.sgstRate,
+      sgstAmount: summary?.sgstAmount,
+    });
+
+    const { parts, labour, taxInclusive } = resolveSummaryPartsLabour(summary);
+
+    const grandTotalCheck = computeGrandTotalCheck({
+      partsTotal: parts,
+      labourTotal: labour,
+      totalTaxAmount: gstInfo.totalTaxAmount,
+      totalGstAmount: summary?.totalGstAmount,
+      grandTotal: summary?.grandTotal,
+      discountAmount: summary?.totalDiscount,
+      taxInclusiveSubtotals: taxInclusive,
+    });
+
+    if (!grandTotalCheck.ok) {
+      this.obs.warn(
+        `WorkshopBillExtractor: Grand total mismatch — ` +
+        `expected=₹${grandTotalCheck.expected.toFixed(2)}, ` +
+        `actual=₹${grandTotalCheck.actual.toFixed(2)}, ` +
+        `delta=₹${grandTotalCheck.delta.toFixed(2)}. Flagging for human review.`,
+      );
+    }
+
+    const billType = classifyBillType(
+      parsedResult.workshopDetails?.invoiceNumber,
+      parsedResult.workshopDetails?.documentTitle,
+    );
+
+    const rawVehicle = parsedResult.workshopDetails?.vehicleNumber ?? null;
+    const normVehicleNo = normaliseVehicleNo(rawVehicle);
+    const vehicleState = extractVehicleState(normVehicleNo);
+
+    const enriched: Record<string, unknown> = {
+      ...parsedResult,
+      tableLayout: parsedResult.tableLayout ?? tableLayout,
+      vehicleNumber: normVehicleNo ?? rawVehicle,
+      vehicleState,
+      billType,
+      gstSummary: gstInfo,
+      grandTotalVerified: grandTotalCheck.ok,
+      requiresHumanReview: parsedResult.requiresHumanReview || !grandTotalCheck.ok,
+      extractionMode: 'chunk-fallback',
+    };
+
+    if (tableLayout === 'sequential') {
+      delete enriched.partsTable;
+      delete enriched.labourTable;
+    }
+
+    this.obs.info(
+      `WorkshopBillExtractor: Extraction successful — ` +
+      `pages=${pageCount}, ` +
+      `layout=${tableLayout}, ` +
+      `lineItems=${parsedResult.lineItemsTable?.length ?? 0}` +
+      (tableLayout === 'split'
+        ? `, parts=${parsedResult.partsTable?.length ?? 0}, labour=${parsedResult.labourTable?.length ?? 0}`
+        : '') +
+      `, billType=${billType}, ` +
+      `gst=${gstInfo.type}(${gstInfo.rate}%), ` +
+      `grandTotalOk=${grandTotalCheck.ok}, ` +
+      `vehicleState=${vehicleState ?? 'N/A'}`,
+    );
+
+    return mergeDocumentQuality(
+      enriched,
+      getQualityHintFromInput(inputData),
+      _config.PRESCREEN_BLUR_CONFIDENCE,
+    );
   }
 }

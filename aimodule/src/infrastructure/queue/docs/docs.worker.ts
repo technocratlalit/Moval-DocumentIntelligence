@@ -2,7 +2,7 @@ import { Worker, Job } from 'bullmq';
 import { bullmqConnection } from '../connection.js';
 import {
   RC_QUEUE_NAME, DL_QUEUE_NAME, WORKSHOP_QUEUE_NAME, INSURANCE_QUEUE_NAME, CLAIM_QUEUE_NAME,
-  ALL_QUEUES, workshopQueue,
+  ALL_QUEUES,
 } from './queues.js';
 import { DocumentService } from '../../../modules/document/document.service.js';
 import { DLQService } from '../dlq/dlq.service.js';
@@ -20,17 +20,14 @@ const dlqService = new DLQService();
 const webhookService = new WebhookService();
 const obs = ObserverService.getInstance();
 
-/** Gemini circuit only affects Gemini-backed queues — workshop uses LlamaParse */
-const GEMINI_QUEUES = ALL_QUEUES.filter((q) => q !== workshopQueue);
-
-// Circuit Breaker → pause / resume Gemini document queues (not workshop)
+// Circuit Breaker → pause / resume ALL four queues
 const breaker = AIService.getInstance().getBreaker();
 
 // on open event
 breaker.on('open', async () => {
-  obs.warn('Circuit Breaker (Gemini) is OPEN. Pausing Gemini document queues...');
+  obs.warn('Circuit Breaker (Gemini) is OPEN. Pausing all document queues...');
   obs.recordCircuitBreakerState('open');
-  for (const q of GEMINI_QUEUES) {
+  for (const q of ALL_QUEUES) {
     try {
       await q.pause();
       obs.info(`Queue ${q.name} paused due to circuit open.`);
@@ -42,9 +39,9 @@ breaker.on('open', async () => {
 
 // on half open event
 breaker.on('halfOpen', async () => {
-  obs.info('Circuit Breaker (Gemini) is HALF_OPEN. Resuming Gemini queues for trial job...');
+  obs.info('Circuit Breaker (Gemini) is HALF_OPEN. Resuming all queues for trial job...');
   obs.recordCircuitBreakerState('halfOpen');
-  for (const q of GEMINI_QUEUES) {
+  for (const q of ALL_QUEUES) {
     try {
       await q.resume();
     } catch (err) {
@@ -55,9 +52,9 @@ breaker.on('halfOpen', async () => {
 
 // on close event
 breaker.on('close', async () => {
-  obs.info('Circuit Breaker (Gemini) is CLOSED. Resuming Gemini document queues.');
+  obs.info('Circuit Breaker (Gemini) is CLOSED. Resuming all document queues.');
   obs.recordCircuitBreakerState('closed');
-  for (const q of GEMINI_QUEUES) {
+  for (const q of ALL_QUEUES) {
     try {
       await q.resume();
     } catch (err) {
@@ -78,7 +75,7 @@ const sharedWorkerOptions = {
 // Job Processor
 
 const processDocumentJob = async (job: Job): Promise<any> => {
-  const { type, urls, correlationId, documentName, documentId, tenant } = job.data;
+  const { type, urls, correlationId, documentName, documentId, tableLayout, tenant } = job.data;
   const effectiveCorrelationId = correlationId ?? job.id ?? 'no-context';
   const effectiveDocumentName = documentName ?? 'unknown';
   const effectiveDocumentId = documentId ?? 'unknown';
@@ -98,7 +95,14 @@ const processDocumentJob = async (job: Job): Promise<any> => {
     };
 
     try {
-      const extractedData = await documentService.extractData(type, urls);
+      const workshopLayout =
+        type.toUpperCase() === 'WORKSHOP'
+          ? (tableLayout === 'split' ? 'split' : 'sequential')
+          : undefined;
+
+      const extractedData = await documentService.extractData(type, urls, {
+        tableLayout: workshopLayout,
+      });
       const durationMs = Date.now() - startTime;
       const summary = getJobCostSummary();
 
@@ -134,7 +138,9 @@ const processDocumentJob = async (job: Job): Promise<any> => {
       }, webhookUrl);
 
       const urlList = Array.isArray(urls) ? urls : [urls];
-      void ExtractionResultCache.set(type, urlList, extractedData);
+      void ExtractionResultCache.set(type, urlList, extractedData, {
+        tableLayout: workshopLayout,
+      });
 
       return {
         data: extractedData,

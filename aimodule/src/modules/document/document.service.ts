@@ -8,6 +8,11 @@ import { ClaimFormExtractor } from './extractor/claim-form.extractor';
 import { DocumentPrescreenService } from './prescreen/document.prescreen.service.js';
 import { AIService } from '../../infrastructure/ai/ai.service';
 import { ObserverService } from '../../infrastructure/observabllity/observer.service.js';
+import type { WorkshopTableLayout } from './extractor/workshop-bill.extractor';
+
+export interface ExtractDataOptions {
+  tableLayout?: WorkshopTableLayout;
+}
 
 const docType = {
   DL: 'DL',
@@ -15,7 +20,7 @@ const docType = {
   POLICY: 'POLICY',
   CLAIM: 'CLAIM',
   WORKSHOP: 'WORKSHOP',
-};
+}
 
 export class DocumentService {
   private dlExtractor: DLExtractor;
@@ -34,22 +39,22 @@ export class DocumentService {
     this.prescreenService = new DocumentPrescreenService();
   }
 
-  public async extractData(documentType: string, urlOrUrls: string | string[]) {
+  public async extractData(
+    documentType: string,
+    urlOrUrls: string | string[],
+    options: ExtractDataOptions = {},
+  ) {
+    // 1. Fetch file(s) from URL(s)
     const urls = Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls];
-    const typeUpper = documentType.toUpperCase();
-
-    // WORKSHOP → LlamaParse (no Gemini fetch / prescreen)
-    if (typeUpper === docType.WORKSHOP) {
-      return await this.workshopExtractor.extract(urls);
-    }
-
-    const filesData = await Promise.all(urls.map((url) => fetchFileFromUrl(url)));
+    const filesData = await Promise.all(urls.map(url => fetchFileFromUrl(url)));
     const inputData = filesData.length === 1 ? filesData[0] : filesData;
 
+    // Cheap Flash-Lite gate — skip full extraction on blurry/blank uploads
     await this.prescreenService.check(inputData, documentType);
 
     try {
-      switch (typeUpper) {
+      // 2. Route to appropriate extractor based on documentType
+      switch (documentType.toUpperCase()) {
         case docType.DL:
           return await this.dlExtractor.extract(inputData);
         case docType.RC:
@@ -58,6 +63,10 @@ export class DocumentService {
           return await this.policyExtractor.extract(inputData);
         case docType.CLAIM:
           return await this.claimExtractor.extract(inputData);
+        case docType.WORKSHOP:
+          return await this.workshopExtractor.extract(inputData, {
+            tableLayout: options.tableLayout === 'split' ? 'split' : 'sequential',
+          });
         default:
           throw new Error(`Unsupported document type: ${documentType}`);
       }
