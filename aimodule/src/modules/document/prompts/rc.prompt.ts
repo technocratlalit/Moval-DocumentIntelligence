@@ -51,6 +51,7 @@ export const getRCPrompt = (): string => `
   • purpose — "Purpose", "Purpose Code" (full line e.g. NEW / L & T FINANCE LTD)
   • fitnessValidUpto — "Fitness Upto", "Fitness Valid Upto", "Fitness Validity"
   • fuel — "Fuel", "Fuel Type" (use field name fuel, not fuelType)
+  • manufacturingDate — "Manufacturing Dt", "Mfg. Date", "Month/Year of Manufacture", "Date of Manufacture"
 
   SEMANTIC FIELD MAPPING:
   • registrationNo — exact as printed (JH02BK5503 / RJ20CJ9516 / 23BH3481K). Preserve format.
@@ -61,6 +62,7 @@ export const getRCPrompt = (): string => `
   • address — full printed address; null if not visible.
   • ownerSerial — owner sequence number (01, 02, 03) — NOT cardSerialNo.
   • registrationDate / regValidity — DD/MM/YYYY or text "As per Fitness" as printed.
+  • manufacturingDate — as printed (MM/YYYY e.g. 06/2020, or DD/MM/YYYY). Not registrationDate.
   • taxPaidUpto — "OTT", "LIFE TIME", "One Time Tax", "Life Tax", or date as printed.
   • fitnessValidUpto — fitness certificate validity date.
   • insuranceUpto — insurance validity if printed.

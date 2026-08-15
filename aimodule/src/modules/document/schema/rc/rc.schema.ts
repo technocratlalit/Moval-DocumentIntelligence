@@ -19,6 +19,7 @@ export const RCSchema = z.object({
   modelNo:          z.string().nullish(),
   fuel:             z.string().nullish(),
   registrationDate: z.string().nullish(),
+  manufacturingDate: z.string().nullish(),
   regValidity:      z.string().nullish(),
   taxPaidUpto:      z.string().nullish(),
   seatingCapacity:  z.string().nullish(),

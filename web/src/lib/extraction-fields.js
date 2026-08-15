@@ -186,7 +186,7 @@ function dlPartition(result) {
 // ── RC fields ─────────────────────────────────────────────────────────────────
 const RC_VEHICLE = [
   'registrationNo', 'manufacturer', 'modelNo', 'vehicleClass', 'colour', 'fuel',
-  'registrationDate', 'regValidity', 'fitnessValidUpto',
+  'registrationDate', 'manufacturingDate', 'regValidity', 'fitnessValidUpto',
   'seatingCapacity', 'unladenWeight', 'ladenWeight',
   'chassisNo', 'engineNo', 'state',
 ]

@@ -26,6 +26,7 @@ export const RCGeminiSchema: Schema = {
     modelNo:           str(),
     fuel:              str(),
     registrationDate:  str(),
+    manufacturingDate: str(),
     regValidity:       str(),
     taxPaidUpto:       str(),
     seatingCapacity:   str(),
