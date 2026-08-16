@@ -7,26 +7,15 @@ function parseCeiling(envCeiling: string | undefined, fallback: number): number 
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** Pass 1 meta — gate + columns only, no rows (~300–800 tokens). */
-export function computeWorkshopMetaMaxTokens(): number {
-  return 4096;
-}
-
-/** Pass 2 rows-only per chunk — compact string[][] output. */
-export function computeWorkshopRowsMaxTokens(
-  pageCount: number,
-  envCeiling?: string,
-  columnCount?: number,
-): number {
-  const ceiling = parseCeiling(envCeiling, 65536);
-  const perPage = columnCount && columnCount >= 10 ? 8192 : 4096;
-  const floor = perPage;
-  return Math.min(ceiling, Math.max(floor, pageCount * perPage));
-}
-
-/** @deprecated Use computeWorkshopMetaMaxTokens + computeWorkshopRowsMaxTokens */
+/**
+ * Dense 17-column commercial vehicle bills (BharatBenz/DICV/Tata): 50–65 rows/page.
+ * 20480/page → 3 pages = 61440, within 65536. Floor 49152 covers 1–2 page chunks.
+ */
 export function computeWorkshopMaxTokens(pageCount: number, envCeiling?: string): number {
-  return computeWorkshopRowsMaxTokens(pageCount, envCeiling);
+  const ceiling = parseCeiling(envCeiling, 65536);
+  const perPage = 20480;
+  const floor = 49152;
+  return Math.min(ceiling, Math.max(floor, pageCount * perPage));
 }
 
 export function computePolicyMaxTokens(pageCount: number, envCeiling?: string): number {
@@ -47,7 +36,8 @@ export function computeClaimMaxTokens(pageCount: number, envCeiling?: string): n
 
 // ponytail: self-check — run via `npx tsx aimodule/src/cost/token-budget.ts`
 if (process.argv[1]?.replace(/\\/g, '/').endsWith('token-budget.ts')) {
-  console.assert(computeWorkshopRowsMaxTokens(2, undefined, 11) === 16384, 'wide table budget');
-  console.assert(computeWorkshopRowsMaxTokens(1, undefined, 7) === 4096, 'narrow table budget');
+  console.assert(computeWorkshopMaxTokens(1) === 49152, '1-page floor');
+  console.assert(computeWorkshopMaxTokens(3) === 61440, '3-page BharatBenz budget');
+  console.assert(computeWorkshopMaxTokens(4, '65536') === 65536, 'ceiling');
   console.log('token-budget self-check OK');
 }

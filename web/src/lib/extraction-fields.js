@@ -316,31 +316,18 @@ const WORKSHOP_QUALITY = [
   'invalidPageIndices', 'confidenceScore', 'requiresHumanReview',
 ]
 
-function uniqueDisplayColumns(columns = []) {
-  const seen = new Map()
-  return columns.map((col) => {
-    const n = (seen.get(col) ?? 0) + 1
-    seen.set(col, n)
-    return n > 1 ? `${col} (${n})` : col
-  })
-}
-
-function zipDynamicTable(table) {
-  if (!table?.columns?.length) return []
-  const displayCols = uniqueDisplayColumns(table.columns)
-  return (table.rows ?? []).map((row, i) => {
-    const obj = { rowIndex: String(i + 1) }
-    displayCols.forEach((col, j) => { obj[col] = row[j] ?? '' })
-    return obj
-  })
-}
-
-function dynamicTableTab(id, label, table) {
-  if (!table?.columns?.length) return null
-  const displayCols = uniqueDisplayColumns(table.columns)
-  const rows = zipDynamicTable(table)
-  return tableTab(id, label, formatTableRows(rows), displayCols)
-}
+const LINE_ITEMS_COLUMNS = [
+  'rowIndex', 'rowType', 'sectionHeader', 'itemCode', 'hsnSac', 'description', 'uom',
+  'quantity', 'rate', 'partsCost', 'labourCost', 'taxableAmount', 'taxAmount', 'totalAmount',
+]
+const PARTS_COLUMNS = [
+  'rowIndex', 'srNo', 'partNumber', 'hsnSac', 'description', 'uom', 'quantity',
+  'unitPrice', 'discount', 'taxableAmount', 'taxAmount', 'totalPrice', 'rowType',
+]
+const LABOUR_COLUMNS = [
+  'rowIndex', 'srNo', 'labourCode', 'hsnSac', 'description', 'quantityOrHours', 'rate',
+  'grossAmount', 'discount', 'taxableAmount', 'taxAmount', 'totalAmount', 'rowType',
+]
 
 function fieldTab(id, label, rows) {
   return { id, label, kind: 'fields', rows }
@@ -354,6 +341,36 @@ function tableTab(id, label, rows, columns) {
     rows: rows ?? [],
     columns: tableColumnsFromRows(rows, columns),
   }
+}
+
+function hasAnyPrintedSrNo(rows) {
+  return rows?.some((r) => {
+    const n = Number(r?.srNo)
+    return Number.isFinite(n) && n > 0
+  })
+}
+
+function flattenExtraColumns(rows) {
+  if (!rows?.length) return rows
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object') return row
+    const { extraColumns, ...rest } = row
+    if (!Array.isArray(extraColumns) || extraColumns.length === 0) return rest
+    const flat = { ...rest }
+    for (const col of extraColumns) {
+      if (col?.key) flat[col.key] = col.value ?? null
+    }
+    return flat
+  })
+}
+
+function workshopTableTab(id, label, rows, baseColumns) {
+  const flat = flattenExtraColumns(rows)
+  const formatted = formatTableRows(flat)
+  const columns = hasAnyPrintedSrNo(flat)
+    ? baseColumns
+    : baseColumns.filter((c) => c !== 'srNo')
+  return tableTab(id, label, formatted, columns)
 }
 
 function formatTableRows(rows) {
@@ -477,62 +494,33 @@ export function buildInspectViews(documentType, result) {
     case 'WORKSHOP': {
       const details = result.workshopDetails ?? {}
       const summary = result.summary ?? {}
+      const isSequential = result.tableLayout === 'sequential' && (result.lineItemsTable?.length ?? 0) > 0
       const overviewRows = [
         { key: 'documentType', value: formatFieldValue(result.documentType) },
+        { key: 'tableLayout', value: formatFieldValue(result.tableLayout) },
         { key: 'invoiceNumber', value: formatFieldValue(details.invoiceNumber) },
         { key: 'vehicleNumber', value: formatFieldValue(details.vehicleNumber) },
         { key: 'name', value: formatFieldValue(details.name) },
         { key: 'grandTotal', value: formatFieldValue(summary.grandTotal) },
-        { key: 'partsTotal', value: formatFieldValue(summary.partsTotal) },
-        { key: 'labourTotal', value: formatFieldValue(summary.labourTotal) },
-        { key: 'partsRows', value: formatFieldValue(result.parts?.rows?.length ?? 0) },
-        { key: 'labourRows', value: formatFieldValue(result.labour?.rows?.length ?? 0) },
-        { key: 'repairGroups', value: formatFieldValue(result.repairGroups?.length ?? 0) },
-        { key: 'notes', value: formatFieldValue(result.notes?.length ?? 0) },
+        { key: 'lineItems', value: formatFieldValue(result.lineItemsTable?.length ?? 0) },
+        { key: 'partsRows', value: formatFieldValue(result.partsTable?.length ?? 0) },
+        { key: 'labourRows', value: formatFieldValue(result.labourTable?.length ?? 0) },
       ]
-      const repairEstimateRows = (result.repairEstimates ?? []).map((e, i) => ({
-        key: `estimate_${i + 1}`,
-        value: formatFieldValue(
-          [e.partNo, e.description, e.demandType, e.total != null ? `total=${e.total}` : null]
-            .filter(Boolean)
-            .join(' · '),
-        ),
-      }))
-      const noteRows = (result.notes ?? []).map((n, i) => ({
-        key: `note_${i + 1}`,
-        value: formatFieldValue(n),
-      }))
-      const groupRows = (result.repairGroups ?? []).map((g) => ({
-        key: g.id,
-        value: formatFieldValue(`${g.title} (${g.members?.length ?? 0} members)`),
-      }))
-      const hintRows = (result.labourServiceHints ?? []).map((h, i) => ({
-        key: `labour_${i + 1}`,
-        value: formatFieldValue(h),
-      }))
       const tabs = [
         fieldTab('overview', 'Overview', overviewRows),
         fieldTab('details', 'Workshop details', pickFieldRows(details, WORKSHOP_DETAILS)),
         fieldTab('summary', 'Summary', pickFieldRows(summary, WORKSHOP_SUMMARY)),
-        dynamicTableTab('parts', 'Parts', result.parts),
-        dynamicTableTab('labour', 'Labour', result.labour),
-        result.misc?.rows?.length ? dynamicTableTab('misc', 'Miscellaneous', result.misc) : null,
-        result.undefinedParts?.rows?.length
-          ? dynamicTableTab('undefinedParts', 'Undefined parts', result.undefinedParts)
-          : null,
-        groupRows.length ? fieldTab('repairGroups', 'Repair groups', groupRows) : null,
-        repairEstimateRows.length
-          ? fieldTab('repairEstimates', 'Repair estimates', repairEstimateRows)
-          : null,
-        noteRows.length ? fieldTab('notes', 'Notes', noteRows) : null,
-        hintRows.length ? fieldTab('serviceHints', 'Labour service hints', hintRows) : null,
-        dynamicTableTab('lineItems', 'Line items', result.lineItems),
+        ...(isSequential
+          ? [workshopTableTab('lineItems', 'Line items', result.lineItemsTable, LINE_ITEMS_COLUMNS)]
+          : []),
+        workshopTableTab('parts', 'Parts table', result.partsTable, PARTS_COLUMNS),
+        workshopTableTab('labour', 'Labour table', result.labourTable, LABOUR_COLUMNS),
         fieldTab('quality', 'Quality', pickFieldRows(result, WORKSHOP_QUALITY)),
         extraFieldsTab(result),
         allTab,
         jsonTab,
       ].filter(Boolean)
-      return { tabs, defaultTab: 'overview' }
+      return { tabs, defaultTab: isSequential ? 'lineItems' : 'parts' }
     }
 
     default:

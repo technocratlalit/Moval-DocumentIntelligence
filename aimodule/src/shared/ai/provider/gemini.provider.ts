@@ -139,9 +139,8 @@ export class GeminiProvider implements IAIProvider {
 
         };
 
-        // Disable thinking for extraction — table OCR is pure reading, not reasoning.
-        // Thinking adds 60–180 s latency and costs tokens with zero accuracy gain.
-        // Only applies to thinking-capable models (not flash-lite); safe to skip for prescreen.
+
+        // Lite models: do not send thinkingConfig (2.5-flash-lite 400s; 3.1-lite worked this way in 58eb947).
         if (callPhase === 'extraction' && !modelToUse.toLowerCase().includes('lite')) {
             (genConfig as any).thinkingConfig = { thinkingBudget: 0 };
         }
