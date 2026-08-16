@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 
 export interface ContentJobOptions {
-  // reserved for future cache key variants
+  tableLayout?: 'split' | 'sequential';
 }
 
 /** Stable id for dedup, result cache, and BullMQ jobId — sha256(type:sorted-urls)[0:16] */

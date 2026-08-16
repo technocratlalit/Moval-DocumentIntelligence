@@ -17,6 +17,7 @@ export interface EnqueueOptions extends ContentJobOptions {
   documentName?: string;   // human-readable file/doc name, e.g. 'vehicle_rc_front.jpg'
   documentId?: string;     // DB record ID from caller (e.g. Laravel document ID)
   tenant?: WebhookTenant;  // Laravel .in / .com — routes webhook after extraction
+  tableLayout?: 'split' | 'sequential';
 }
 
 export interface EnqueueResult {
