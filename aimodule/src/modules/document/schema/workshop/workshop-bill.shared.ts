@@ -765,6 +765,21 @@ function normalizeRowTypeFromPl(v: unknown): 'PART' | 'LABOUR' {
   return 'PART';
 }
 
+/** LABOUR: blank rate + labourCost only. Do not touch partsCost or other extracted fields. */
+function applyLineItemCostSplit(row: Record<string, unknown>): void {
+  const rt = String(row.rowType ?? '').toUpperCase();
+  const total = (row.totalAmount as number | null) ?? null;
+  if (rt === 'LABOUR') {
+    row.rate = null;
+    row.labourCost = null;
+    return;
+  }
+  if (rt === 'PART') {
+    row.partsCost = total;
+    row.labourCost = null;
+  }
+}
+
 function expandLineItemArrayRow(arr: unknown[]): Record<string, unknown> {
   const afterPc = stripPcColumn(arr);
   const afterCode = rescuePartCodeColumn(afterPc);
@@ -778,10 +793,7 @@ function expandLineItemArrayRow(arr: unknown[]): Record<string, unknown> {
     }
     row[k] = coerceVal(fixed[i], LINE_ITEMS_NUMERIC_IDX.has(i));
   });
-  const rt = row.rowType as 'PART' | 'LABOUR';
-  const total = row.totalAmount as number | null;
-  row.partsCost = rt === 'PART' ? total : null;
-  row.labourCost = rt === 'LABOUR' ? total : null;
+  applyLineItemCostSplit(row);
   row.extraColumns = parseLineItemExtraColumnPairs(fixed);
   return row;
 }
@@ -800,6 +812,7 @@ export function expandLineItemsArrayRows(raw: Record<string, unknown>): Record<s
       });
   } else {
     lineItemsTable = rawItems as Record<string, unknown>[];
+    lineItemsTable.forEach(applyLineItemCostSplit);
   }
 
   return {
